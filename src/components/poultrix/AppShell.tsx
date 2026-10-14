@@ -1,10 +1,15 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   LayoutDashboard, Bird, Wheat, Thermometer, ScanEye, Bell, Cpu, CalendarRange, LineChart, Settings, UserRound, Wifi,
 } from "lucide-react";
 import { farm, alerts } from "@/lib/demo-data";
+import { getMyFarm, type PoultrixFarm } from "@/lib/farm-store";
+import poultrixLogo from "@/assets/poultrix-logo.png";
+import { usePx } from "./v3";
 import { Dot } from "./ui";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { useProfile } from "@/hooks/use-profile";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -29,19 +34,31 @@ const MOBILE = [
 
 function Logo() {
   return (
-    <div className="flex items-center gap-2.5">
-      <div className="grid h-9 w-9 place-items-center rounded-xl bg-sidebar-primary font-display text-lg font-extrabold text-sidebar-primary-foreground">P</div>
-      <div className="leading-tight">
-        <div className="font-display text-lg font-extrabold tracking-tight">POULTRIX</div>
-        <div className="text-[11px] opacity-70">Smart broiler house</div>
-      </div>
-    </div>
+    <img
+      src={poultrixLogo}
+      alt="Poultrix — Smart Feeding & Climate Control"
+      width={1489}
+      height={490}
+      draggable={false}
+      className="w-full select-none"
+    />
   );
 }
 
 export function AppShell({ children }: { children: ReactNode }) {
   const path = useRouterState({ select: (s) => s.location.pathname });
-  const active = alerts.filter((a) => a.status === "Active").length;
+  const s = usePx();
+  const { profile, avatarUrl } = useProfile();
+  const [online, setOnline] = useState(true);
+  const [savedFarm, setSavedFarm] = useState<PoultrixFarm | null>(null);
+  useEffect(() => { let mounted=true; const refresh=()=>{getMyFarm().then(f=>{if(mounted)setSavedFarm(f);}).catch(console.error);};refresh();window.addEventListener("poultrix:farm-updated",refresh);return()=>{mounted=false;window.removeEventListener("poultrix:farm-updated",refresh);};},[]);
+  useEffect(() => {
+    const on = () => setOnline(navigator.onLine);
+    on();
+    window.addEventListener("online", on); window.addEventListener("offline", on);
+    return () => { window.removeEventListener("online", on); window.removeEventListener("offline", on); };
+  }, []);
+  const active = alerts.filter((a) => a.status === "Active" && !s.acked.includes(a.id)).length;
 
   return (
     <div className="min-h-screen lg:grid lg:grid-cols-[260px_1fr]">
@@ -68,10 +85,13 @@ export function AppShell({ children }: { children: ReactNode }) {
           })}
         </nav>
         <Link to="/profile" className="mt-4 flex items-center gap-3 rounded-lg border border-sidebar-border p-3 hover:bg-sidebar-accent/60">
-          <div className="grid h-9 w-9 place-items-center rounded-full bg-sidebar-accent"><UserRound className="h-4 w-4" /></div>
+          <Avatar className="h-9 w-9 bg-sidebar-accent">
+            {avatarUrl && <AvatarImage src={avatarUrl} alt={profile?.full_name || "Profile photo"} className="object-cover" />}
+            <AvatarFallback className="bg-sidebar-accent"><UserRound className="h-4 w-4" /></AvatarFallback>
+          </Avatar>
           <div className="min-w-0 text-sm">
-            <div className="truncate font-semibold">John Karl Dueñas</div>
-            <div className="truncate text-xs opacity-70">{farm.location}</div>
+            <div className="truncate font-semibold">{profile?.full_name || "My profile"}</div>
+            <div className="truncate text-xs opacity-70">{savedFarm?.location ?? "Farm location unavailable"}</div>
           </div>
         </Link>
       </aside>
@@ -80,7 +100,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <header className="sticky top-0 z-20 border-b bg-background/90 backdrop-blur">
           <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
             <div className="min-w-0">
-              <div className="truncate font-semibold">{farm.name}</div>
+              <div className="truncate font-semibold">{savedFarm?.name ?? "Poultrix"}</div>
               <div className="truncate text-xs text-muted-foreground">{farm.batch} · {farm.stage} (AI)</div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
@@ -90,7 +110,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 title="Alerts"
                 className={`relative grid h-10 w-10 place-items-center rounded-full border bg-card transition-colors hover:bg-accent ${path.startsWith("/alerts") ? "text-primary" : "text-foreground"}`}
               >
-                <Bell className="h-5 w-5" />
+                <Bell className={`h-5 w-5 ${active > 0 ? "bell-ring" : ""}`} />
                 {active > 0 && (
                   <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-danger px-1 text-[10px] font-bold text-danger-foreground">
                     {active}
@@ -98,8 +118,8 @@ export function AppShell({ children }: { children: ReactNode }) {
                 )}
               </Link>
               <div className="flex items-center gap-2 rounded-full border bg-card px-3 py-1.5 text-xs font-medium">
-                <Dot tone="ok" pulse />
-                <span className="hidden sm:inline">Live ·</span>
+                <Dot tone={online ? "ok" : "danger"} pulse={online} />
+                <span className="hidden sm:inline">{online ? "Live ·" : "Offline · showing last data ·"}</span>
                 <Wifi className="hidden h-3.5 w-3.5 text-muted-foreground sm:block" />
                 <span className="text-muted-foreground">{farm.lastUpdate}</span>
               </div>

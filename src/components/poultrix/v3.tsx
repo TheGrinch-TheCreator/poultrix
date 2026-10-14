@@ -12,6 +12,7 @@ type State = {
   hold: boolean;
   nightPause: boolean;
   discrepancyG: number;
+  acked: string[]; // acknowledged (dismissed) alert ids
 };
 let state: State = {
   comps: [
@@ -23,6 +24,7 @@ let state: State = {
   hold: false,
   nightPause: false,
   discrepancyG: 140,
+  acked: [],
 };
 const subs = new Set<() => void>();
 function set(p: Partial<State>) {
@@ -45,6 +47,12 @@ export const pxActions = {
   },
   declare(comps: [Comp, Comp]) {
     set({ comps, hold: false, discrepancyG: 0, counter: state.counter >= 3 ? 0 : state.counter });
+  },
+  acknowledge(id: string) {
+    if (!state.acked.includes(id)) set({ acked: [...state.acked, id] });
+  },
+  restoreAlert(id: string) {
+    set({ acked: state.acked.filter((x) => x !== id) });
   },
 };
 

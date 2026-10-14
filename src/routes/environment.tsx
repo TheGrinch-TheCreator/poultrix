@@ -1,64 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { Droplets, Sun, Thermometer, ShieldCheck } from "lucide-react";
-import { env, envHistory, envStatus, farm, stageInfo } from "@/lib/demo-data";
-import { Card, CardTitle, DemoTag, DeviceState, PageHeader, Pill } from "@/components/poultrix/ui";
-import { TrendChart } from "@/components/poultrix/charts";
-
-export const Route = createFileRoute("/environment")({
-  head: () => ({
-    meta: [
-      { title: "Environment — POULTRIX" },
-      { name: "description", content: "Live temperature, humidity and light with automatic fan, heat lamp and LED control." },
-      { property: "og:title", content: "Environment — POULTRIX" },
-      { property: "og:description", content: "Live temperature, humidity and light with automatic fan, heat lamp and LED control." },
-    ],
-  }),
-  component: EnvPage,
-});
-
-function EnvPage() {
-  const st = stageInfo(farm.stage);
-  const es = envStatus(env.temp, farm.stage);
-  return (
-    <>
-      <PageHeader title="Environment" subtitle={`Philippine climate targets for the ${farm.stage} stage — cooling is the main job.`} right={<DemoTag />} />
-      <div className="grid gap-5 md:grid-cols-3">
-        <Card>
-          <CardTitle icon={<Thermometer className="h-4 w-4" />} right={<Pill tone={es.tone}>{es.label}</Pill>}>Temperature</CardTitle>
-          <div className="num text-5xl font-extrabold">{env.temp}°C</div>
-          <p className="text-sm font-medium">Current: {env.temp}°C | Target: {st.temp[0]}–{st.temp[1]}°C</p>
-        </Card>
-        <Card>
-          <CardTitle icon={<Droplets className="h-4 w-4" />} right={<Pill tone="ok">Normal</Pill>}>Humidity</CardTitle>
-          <div className="num text-5xl font-extrabold">{env.humidity}%</div>
-          <p className="text-sm text-muted-foreground">Monitored only — no humidity control</p>
-        </Card>
-        <Card>
-          <CardTitle icon={<Sun className="h-4 w-4" />} right={<Pill tone="ok">{env.lightLabel}</Pill>}>Light level</CardTitle>
-          <div className="num text-5xl font-extrabold">{env.lightLux}<span className="text-xl text-muted-foreground"> lux</span></div>
-          <p className="text-sm text-muted-foreground">Target {st.lux[0]}–{st.lux[1]} lux</p>
-          <p className="mt-2 text-sm font-medium">Light hours today: {env.lightHoursOn}h · target {st.lightHours[0]}–{st.lightHours[1]}h</p>
-        </Card>
-      </div>
-
-      <Card className="mt-5">
-        <CardTitle icon={<ShieldCheck className="h-4 w-4" />} right={<Pill tone="ok">Automatic</Pill>}>Devices — and why</CardTitle>
-        <p className="mb-4 rounded-lg bg-surface px-3 py-2 text-sm font-medium">{es.msg}</p>
-        <div className="grid gap-3 sm:grid-cols-3">
-          <DeviceState label="Exhaust fans" on={env.fans.on} total={env.fans.total} reason="turn on when above target" />
-          <DeviceState label="Heat lamps" on={env.heatLamps.on} total={env.heatLamps.total} reason={farm.stage === "Starter" ? "turn on when below target" : "Standby — Starter stage only"} />
-          <DeviceState label="LED lights" on={env.leds.on} total={env.leds.total} reason="ON — within light schedule" />
-        </div>
-        <p className="mt-4 text-xs text-muted-foreground">
-          These 220V devices are controlled on-site by POULTRIX. Manual override from the web is not available — TBD / requires implementation decision.
-        </p>
-      </Card>
-
-      <div className="mt-5 grid gap-5 lg:grid-cols-3">
-        <Card><CardTitle>Temperature · 24h</CardTitle><TrendChart data={envHistory} dataKey="temp" color="var(--chart-5)" unit="°" band={st.temp} height={200} /></Card>
-        <Card><CardTitle>Humidity · 24h</CardTitle><TrendChart data={envHistory} dataKey="humidity" color="var(--chart-2)" unit="%" height={200} /></Card>
-        <Card><CardTitle>Light · 24h</CardTitle><TrendChart data={envHistory} dataKey="light" color="var(--chart-3)" unit="" height={200} /></Card>
-      </div>
-    </>
-  );
-}
+import { Card, CardTitle, DeviceState, PageHeader, Pill } from "@/components/poultrix/ui";
+import { useHardware, display, stageName } from "@/lib/live-hardware";
+export const Route=createFileRoute("/environment")({component:EnvPage});
+function EnvPage(){const {data,error}=useHardware();const stage=stageName(data?.stage);const temp=data?.temperature;const target=data?.temperatureTarget;const online=!!data?.connected;const high=typeof temp==="number"&&target&&temp>target.max;const low=typeof temp==="number"&&target&&temp<target.min;
+return <><PageHeader title="Environment" subtitle="Live readings from Raspberry Pi 5 and Arduino Mega" right={<Pill tone={online?"ok":"warn"}>{online?"Hardware connected":error?"API offline":"Waiting for hardware"}</Pill>}/>
+<div className="grid gap-5 md:grid-cols-3"><Card><CardTitle icon={<Thermometer className="h-4 w-4"/>} right={<Pill tone={!online?"neutral":high||low?"warn":"ok"}>{!online?"Offline":high?"Too hot":low?"Too cold":temp==null?"Waiting":"Normal"}</Pill>}>Temperature</CardTitle><div className="num text-5xl font-extrabold">{display(temp,"°C")}</div><p className="text-sm font-medium">Target: {target?`${target.min}–${target.max}°C`:"—"} · Stage: {stage||"—"}</p></Card>
+<Card><CardTitle icon={<Droplets className="h-4 w-4"/>}>Humidity</CardTitle><div className="num text-5xl font-extrabold">{display(data?.humidity,"%")}</div><p className="text-sm text-muted-foreground">Monitored only — no humidity control</p></Card>
+<Card><CardTitle icon={<Sun className="h-4 w-4"/>} right={<Pill tone="neutral">LDR</Pill>}>Daylight detection</CardTitle><div className="num text-5xl font-extrabold">{typeof data?.lightRaw==="number"?data.lightRaw:"—"}</div><p className="text-sm text-muted-foreground">Raw LDR reading (not lux). LED scheduling and daylight threshold require hardware confirmation.</p></Card></div>
+<Card className="mt-5"><CardTitle icon={<ShieldCheck className="h-4 w-4"/>} right={<Pill tone={online?"ok":"neutral"}>{online?"Live status":"Unavailable"}</Pill>}>Devices — and why</CardTitle><p className="mb-4 rounded-lg bg-surface px-3 py-2 text-sm font-medium">{!online?"Waiting for Arduino connection":high?"Temperature above target — cooling may activate":low?"Temperature below target — heating may activate":"Automatic control is managed by the Arduino"}</p><div className="grid gap-3 sm:grid-cols-3"><DeviceState label="Exhaust fans" on={online?(data?.fansOn??0):0} total={4} reason={online?"Actual Arduino status":"Status unavailable"}/><DeviceState label="Heat lamps" on={online?(data?.heatersOn??0):0} total={2} reason={online?"Actual Arduino status":"Status unavailable"}/><DeviceState label="LED lighting" on={online&&data?.led?1:0} total={1} reason={online?"Actual relay status":"Status unavailable"}/></div><p className="mt-4 text-xs text-muted-foreground">A zero count when disconnected is not proof a device is off. Do not rely on this page as a safety shutdown.</p></Card>
+<div className="mt-5 grid gap-5 lg:grid-cols-3">{["Temperature · history","Humidity · history","Light · history"].map(x=><Card key={x}><CardTitle>{x}</CardTitle><div className="flex h-44 items-center justify-center text-sm text-muted-foreground">No recorded history yet</div></Card>)}</div></>}

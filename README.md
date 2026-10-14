@@ -1,26 +1,23 @@
-# Poultrix Web Application
+# Poultrix — Independent Web Application
 
-Independent web interface for the Poultrix automated broiler management system.
+React 19 + TypeScript + TanStack Start + Tailwind CSS + Supabase. The original pages, dark/light mode, and skeleton loading components are retained.
 
-## Stack
+## Local development
 
-- React 19
-- TypeScript
-- TanStack Start / Router
-- Tailwind CSS
-- Vite
+1. Install Node.js 22+ and run `npm install`.
+2. Copy `.env.example` to `.env` and supply **your own** Supabase URL and publishable key.
+3. Run `npm run dev`.
 
-## Development
+## Production deployment (Cloudflare Workers)
 
-```bash
-npm install
-npm run dev
-```
+This project uses the Cloudflare Vite plugin. Set matching `VITE_SUPABASE_*` build variables and server-side `SUPABASE_*` variables in your deployment. Run `npm run build`, then `npx wrangler deploy`. Connect the GitHub repository to Cloudflare for automatic deployments.
 
-## Production build
+## Important authentication and database notes
 
-```bash
-npm run build
-```
+Google OAuth now uses standard `supabase.auth.signInWithOAuth`. Configure Google OAuth in **your own** Supabase project and whitelist your deployment URL as a redirect URL. The original project's Supabase database is **not** included in this ZIP; SQL migrations are retained in `supabase/migrations`. Review and apply them to your own project before expecting persistent data or working accounts.
 
-The current application uses demonstration data while the hardware integration layer is under development.
+The application contains demo data. This cleanup does not turn simulated data into live hardware telemetry. Never use demo data as evidence that sensors or actuators are connected.
+
+## Changes
+
+Removed proprietary build and authentication packages, editor preview session brokering, editor telemetry, project metadata, old hosted-service environment values, and generated dependency lockfile. Added standard Vite/TanStack/Cloudflare config and independent OAuth integration. Regenerate a lockfile with `npm install`.

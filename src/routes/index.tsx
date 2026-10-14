@@ -1,199 +1,153 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { AlertTriangle, ArrowRight, Bird, Droplets, Fan, Flame, Lightbulb, ScanEye, Sun, Thermometer, Wheat, Cpu } from "lucide-react";
-import { alerts, env, envHistory, envStatus, farm, feed, hardware, stageInfo, STAGES } from "@/lib/demo-data";
-import { Card, CardTitle, DemoTag, Dot, Meter, Pill, StageBadge, healthTone, stageBar } from "@/components/poultrix/ui";
-import { ClassificationStatus, FeedHoldAlert, FeedSchedulePanel, FeedStockPanel, TransitionIndicator } from "@/components/poultrix/v3";
-import { TrendChart } from "@/components/poultrix/charts";
+import { useEffect, useState } from "react";
+import { Activity, Camera, Cpu, Droplets, Fan, Flame, Lightbulb, ScanEye, Sun, Thermometer, Wheat } from "lucide-react";
+import { Card, CardTitle, Pill } from "@/components/poultrix/ui";
+import { API_URL, useAI, useHardware, display, stageName } from "@/lib/live-hardware";
 
 export const Route = createFileRoute("/")({
-  head: () => ({
-    meta: [
-      { title: "Dashboard — POULTRIX" },
-      { name: "description", content: "At-a-glance view of your broiler house: growth stage, temperature, feeding and system health." },
-      { property: "og:title", content: "Dashboard — POULTRIX" },
-      { property: "og:description", content: "At-a-glance view of your broiler house: growth stage, temperature, feeding and system health." },
-    ],
-  }),
+  head: () => ({ meta: [{ title: "Dashboard — POULTRIX" }, { name: "description", content: "Live Poultrix hardware monitoring" }] }),
   component: Dashboard,
 });
 
+type Health = { status?: string; issues?: string[]; lastChecked?: string; internet?: boolean; camera?: boolean; arduino?: boolean; aiModel?: boolean; dht22?: string | null };
+type Weight = { connected?: boolean; status?: string; estimated?: boolean; weightGrams?: number | null; weightKg?: number | null; updatedAt?: string | null };
+type Gate = { status?: string; durationMs?: number; estimatedGrams?: number | null; updatedAt?: string | null };
+type Feeding = { connected?: boolean; gates?: Record<string, Gate>; events?: unknown[]; pending?: { gate?: number; durationMs?: number } | null };
+
+function useEndpoint<T>(path: string) {
+  const [data, setData] = useState<T | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    let busy = false;
+    const load = async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const response = await fetch(`${API_URL}${path}`, { cache: "no-store" });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const value = await response.json() as T;
+        if (active) { setData(value); setError(null); }
+      } catch (cause) {
+        if (active) { setData(null); setError(cause instanceof Error ? cause.message : "Unavailable"); }
+      } finally { busy = false; }
+    };
+    void load();
+    const timer = setInterval(() => void load(), 3000);
+    return () => { active = false; clearInterval(timer); };
+  }, [path]);
+  return { data, error };
+}
+
 function Dashboard() {
-  const st = stageInfo(farm.stage);
-  const es = envStatus(env.temp, farm.stage);
-  const activeAlerts = alerts.filter((a) => a.status === "Active");
-  const allHw = hardware.flatMap((g) => g.items);
-  const hwWarn = allHw.filter((i) => i.status !== "ok").length;
+  const { data: hw, error: hardwareError } = useHardware();
+  const { data: ai, error: aiError } = useAI();
+  const { data: health, error: healthError } = useEndpoint<Health>("/api/system/health");
+  const { data: weight, error: weightError } = useEndpoint<Weight>("/api/feeding/weight");
+  const { data: feeding, error: feedingError } = useEndpoint<Feeding>("/api/feeding/status");
+
+  const connected = hw?.connected === true && !hardwareError;
+  const mode = hw?.mode?.toLowerCase();
+  const live = connected && mode === "live";
+  const temp = live ? hw?.temperature : null;
+  const humidity = live ? hw?.humidity : null;
+  const rawLight = live ? hw?.lightRaw : null;
+  const target = hw?.temperatureTarget;
+  const high = typeof temp === "number" && target && temp > target.max;
+  const low = typeof temp === "number" && target && temp < target.min;
+  const stage = stageName(ai?.detectedStage);
+  const systemStatus = healthError ? "API unavailable" : health?.status || "Checking";
+  const healthReady = health?.status === "READY" && connected;
+  const gates = Object.entries(feeding?.gates ?? {});
+  const activeGates = gates.filter(([, gate]) => gate.status === "DISPENSING");
+  const weightValid = weight?.connected && !weightError && typeof weight.weightGrams === "number" && Number.isFinite(weight.weightGrams);
 
   return (
     <div className="space-y-5">
-      {/* 1. System health / alerts */}
-      <div className="grid gap-3 md:grid-cols-[1fr_auto]">
-        <div className="flex items-start gap-3 rounded-xl border border-ok/30 bg-ok-soft p-4">
-          <Dot tone="ok" pulse />
-          <div className="-mt-1 min-w-0">
-            <div className="font-display text-lg font-bold text-foreground">All systems running automatically</div>
-            <p className="text-sm text-muted-foreground">
-              {activeAlerts.length} things need a look · {hwWarn} device warnings · nothing critical
-            </p>
-          </div>
-        </div>
-        <Link to="/alerts" className="flex items-center justify-between gap-3 rounded-xl border bg-card px-4 py-3 text-sm font-semibold hover:bg-muted">
-          <span className="flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-warn" /> {activeAlerts.length} active alerts</span>
-          <ArrowRight className="h-4 w-4" />
-        </Link>
-      </div>
-
-      <FeedHoldAlert />
-      <TransitionIndicator />
-
-      <div className="grid gap-5 lg:grid-cols-3">
-        {/* 2. Growth stage */}
-        <Card className="lg:col-span-2">
-          <CardTitle icon={<ScanEye className="h-4 w-4" />} right={<DemoTag />}>AI Growth Stage</CardTitle>
-          <div className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-              <StageBadge stage={farm.stage} size="lg" />
-              <div className="mt-3 flex items-baseline gap-2">
-                <span className="num text-6xl font-extrabold">{farm.stage}</span>
-                <span className="text-lg text-muted-foreground">stage</span>
-              </div>
-              <div className="mt-1"><ClassificationStatus /></div>
-            </div>
-            <div className="grid grid-cols-3 gap-3 text-center sm:w-72">
-              <Mini label="Birds" value={String(farm.birds)} />
-              <Mini label="Confidence" value={`${Math.round(farm.confidence * 100)}%`} />
-              <Mini label="Batch" value="Active" />
-            </div>
-          </div>
-          <div className="mt-6 flex gap-1">
-            {STAGES.map((s) => {
-              const len = s.days[1] - s.days[0] + 1;
-              const idx = STAGES.findIndex((x) => x.name === farm.stage);
-              const me = STAGES.findIndex((x) => x.name === s.name);
-              const done = me < idx ? len : me === idx ? len / 2 : 0;
-              return (
-                <div key={s.name} style={{ flex: len }} className="min-w-0">
-                  <div className="h-3 overflow-hidden rounded-full bg-muted">
-                    <div className={`h-full ${stageBar[s.name]}`} style={{ width: `${(done / len) * 100}%` }} />
-                  </div>
-                  <div className="mt-1.5 truncate text-xs text-muted-foreground">{s.name}{s.name === farm.stage && " · detected now"}</div>
-                </div>
-              );
-            })}
-          </div>
-        </Card>
-
-        {/* 3. Temperature */}
-        <Card>
-          <CardTitle icon={<Thermometer className="h-4 w-4" />} right={<Pill tone={es.tone}>{es.label}</Pill>}>Temperature</CardTitle>
-          <div className="num text-6xl font-extrabold">{env.temp}<span className="text-3xl text-muted-foreground">°C</span></div>
-          <p className="mt-1 text-sm font-medium">Current: {env.temp}°C | Target: {st.temp[0]}–{st.temp[1]}°C</p>
-          <p className="mt-3 rounded-lg bg-surface px-3 py-2 text-sm font-medium">{es.msg}</p>
-          <div className="mt-4 grid grid-cols-2 gap-3">
-            <SmallStat icon={<Droplets className="h-4 w-4" />} label="Humidity" value={`${env.humidity}%`} />
-            <SmallStat icon={<Sun className="h-4 w-4" />} label="Light hours" value={`${env.lightHoursOn} / ${st.lightHours[0]}–${st.lightHours[1]}h`} />
-          </div>
-        </Card>
-      </div>
-
-      <div className="grid gap-5 lg:grid-cols-3">
-        {/* 4. Feeding */}
-        <Card className="lg:col-span-2">
-          <CardTitle icon={<Wheat className="h-4 w-4" />} right={<Link to="/feeding" className="text-xs font-semibold text-primary">Details →</Link>}>Feeding</CardTitle>
-          <div className="grid gap-5 sm:grid-cols-2">
-            <div>
-              <div className="text-xs uppercase tracking-wider text-muted-foreground">Now feeding</div>
-              <div className="font-display text-2xl font-bold">{feed.type}</div>
-              <div className="text-sm text-muted-foreground">From Compartment {feed.activeCompartment}</div>
-              <div className="mt-4 flex items-baseline gap-2">
-                <span className="num text-4xl font-extrabold">{feed.dispensed}g</span>
-                <span className="text-muted-foreground">of {feed.targetPerFeeding}g target</span>
-              </div>
-              <div className="mt-2"><Meter value={(feed.dispensed / feed.targetPerFeeding) * 100} /></div>
-              <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
-                <div><span className="text-muted-foreground">Last:</span> {feed.lastFeeding}</div>
-                <div><span className="text-muted-foreground">Next:</span> {feed.nextFeeding}</div>
-                <div><span className="text-muted-foreground">Accuracy:</span> {feed.accuracy}%</div>
-              </div>
-            </div>
-            {/* 5. Inventory */}
-            <div className="space-y-3">
-              {feed.compartments.map((c) => {
-                const pct = (c.kg / c.capacity) * 100;
-                const tone = pct < 25 ? "danger" : pct < 50 ? "warn" : "ok";
-                return (
-                  <div key={c.id} className="rounded-xl border bg-surface p-4">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="text-xs text-muted-foreground">Compartment {c.id}{c.id === feed.activeCompartment && " · ACTIVE"}</div>
-                        <div className="truncate font-semibold">{c.contents}</div>
-                      </div>
-                      <div className="num shrink-0 text-2xl font-bold">{c.kg}<span className="text-sm text-muted-foreground"> kg</span></div>
-                    </div>
-                    <div className="mt-2"><Meter value={pct} tone={tone} /></div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </Card>
-
-        {/* Devices + hardware */}
-        <Card>
-          <CardTitle icon={<Cpu className="h-4 w-4" />} right={<Link to="/hardware" className="text-xs font-semibold text-primary">All →</Link>}>Devices & system</CardTitle>
-          <div className="grid grid-cols-3 gap-2">
-            <DevChip icon={<Fan className="h-5 w-5" />} label="Fans" on={env.fans.on} total={env.fans.total} />
-            <DevChip icon={<Flame className="h-5 w-5" />} label="Heat" on={env.heatLamps.on} total={env.heatLamps.total} standby={farm.stage !== "Starter"} />
-            <DevChip icon={<Lightbulb className="h-5 w-5" />} label="Lights" on={env.leds.on} total={env.leds.total} />
-          </div>
-          <ul className="mt-4 grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
-            {allHw.slice(0, 10).map((h) => (
-              <li key={h.name} className="flex min-w-0 items-center gap-2">
-                <Dot tone={healthTone(h.status)} />
-                <span className="truncate">{h.plain}</span>
-              </li>
-            ))}
-          </ul>
-        </Card>
-      </div>
-
-      <div className="grid gap-5 md:grid-cols-2">
-        <FeedSchedulePanel />
-        <FeedStockPanel />
-      </div>
-
-      {/* 7. Trend */}
       <Card>
-        <CardTitle icon={<Bird className="h-4 w-4" />} right={<span className="text-xs text-muted-foreground">Last 24 hours · green band = target</span>}>Temperature trend</CardTitle>
-        <TrendChart data={envHistory} dataKey="temp" color="var(--chart-5)" unit="°" band={st.temp} />
+        <CardTitle icon={<Activity className="h-4 w-4" />} right={<Pill tone={healthReady ? "ok" : "warn"}>{systemStatus}</Pill>}>Live Poultrix system</CardTitle>
+        <p className="text-sm text-muted-foreground">{healthReady ? "Monitored services are responding." : health?.issues?.length ? health.issues.join(" · ") : "Waiting for a healthy connection to the Raspberry Pi."}</p>
+        <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
+          <span>Arduino: {connected ? "Connected" : "Unavailable"}</span><span>·</span>
+          <span>Mode: {connected ? mode?.toUpperCase() || "Unknown" : "Unavailable"}</span><span>·</span>
+          <span>Camera: {hw?.camera?.connected ? "Connected" : "Unavailable"}</span><span>·</span>
+          <span>AI: {aiError ? "Unavailable" : ai?.status || "Waiting"}</span>
+        </div>
+        {mode === "test" && <p className="mt-3 rounded-lg bg-surface px-3 py-2 text-sm">Arduino is in TEST mode. Simulated temperature and lighting values are intentionally hidden here. Switch to LIVE mode when the sensors are ready.</p>}
+        {hardwareError && <p className="mt-2 text-xs text-destructive">Hardware API: {hardwareError}</p>}
+      </Card>
+
+      <div className="grid gap-5 lg:grid-cols-3">
+        <Card className="lg:col-span-2">
+          <CardTitle icon={<ScanEye className="h-4 w-4" />} right={<Link to="/ai-stage" className="text-xs font-semibold text-primary">AI details →</Link>}>AI growth stage</CardTitle>
+          <div className="mt-2 text-5xl font-extrabold">{stage || "—"}</div>
+          <p className="mt-2 text-sm text-muted-foreground">{stage && typeof ai?.confidence === "number" ? `${ai.confidence.toFixed(1)}% confidence` : "Awaiting a completed classification"}</p>
+          <div className="mt-4 grid grid-cols-2 gap-3">
+            <Stat label="AI status" value={ai?.status || "Unavailable"} />
+            <Stat label="Last analyzed" value={formatDate(ai?.lastInference)} />
+          </div>
+          <p className="mt-3 text-xs text-muted-foreground">AI-detected stage is shown separately from the Arduino's current control stage ({connected ? stageName(hw?.stage) || "Unknown" : "Unavailable"}).</p>
+        </Card>
+        <Card>
+          <CardTitle icon={<Thermometer className="h-4 w-4" />} right={<Pill tone={!live || temp == null ? "neutral" : high || low ? "warn" : "ok"}>{!live || temp == null ? "No live reading" : high ? "Above target" : low ? "Below target" : "In range"}</Pill>}>Temperature</CardTitle>
+          <div className="num mt-2 text-5xl font-extrabold">{display(temp, "°C")}</div>
+          <p className="mt-2 text-sm text-muted-foreground">Target: {connected && target ? `${target.min}–${target.max}°C` : "—"}</p>
+          <div className="mt-4 grid grid-cols-2 gap-3">
+            <Stat label="Humidity" value={display(humidity, "%")} icon={<Droplets className="h-4 w-4" />} />
+            <Stat label="LDR raw" value={typeof rawLight === "number" ? String(rawLight) : "—"} icon={<Sun className="h-4 w-4" />} />
+          </div>
+          <p className="mt-3 text-xs text-muted-foreground">{!live ? "LIVE mode required for actual sensor readings." : "Readings reported by Arduino sensors."}</p>
+        </Card>
+      </div>
+
+      <div className="grid gap-5 lg:grid-cols-3">
+        <Card className="lg:col-span-2">
+          <CardTitle icon={<Wheat className="h-4 w-4" />} right={<Link to="/feeding" className="text-xs font-semibold text-primary">Feeding details →</Link>}>Feed compartments · live monitoring</CardTitle>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="rounded-xl bg-surface p-4">
+              <div className="text-xs uppercase tracking-wider text-muted-foreground">Combined feed remaining · estimated</div>
+              <div className="num mt-2 text-4xl font-extrabold">{weightValid ? `${(weight!.weightGrams! / 1000).toFixed(3)} kg` : "—"}</div>
+              <p className="mt-2 text-xs text-muted-foreground">Four load sensors, one HX711, two compartments. Individual compartment weights are not available.</p>
+              <p className="mt-2 text-xs text-muted-foreground">{weightError ? `Weight API: ${weightError}` : weightValid ? `Last updated: ${formatDate(weight?.updatedAt)}` : "Waiting for load-cell readings"}</p>
+            </div>
+            <div className="rounded-xl border p-4">
+              <div className="text-xs uppercase tracking-wider text-muted-foreground">Dispensing status</div>
+              <div className="mt-2 text-2xl font-bold">{feedingError || !feeding?.connected ? "Unavailable" : activeGates.length ? "Dispensing" : feeding?.pending ? "Starting" : gates.length ? "Not dispensing" : "Waiting"}</div>
+              <p className="mt-2 text-sm text-muted-foreground">{activeGates.length ? `Active gate(s): ${activeGates.map(([id]) => id).join(", ")}` : "Servo states reported by Arduino"}</p>
+              <p className="mt-2 text-xs text-muted-foreground">{feedingError ? `Feeding API: ${feedingError}` : "Dispensed amounts based on servo timing are estimates, not verified scale measurements."}</p>
+            </div>
+          </div>
+          <div className="mt-4 grid gap-2 sm:grid-cols-3">
+            {["1", "2", "3"].map(id => <Stat key={id} label={`Gate ${id}`} value={feeding?.connected ? feeding.gates?.[id]?.status || "Unknown" : "Unavailable"} />)}
+          </div>
+        </Card>
+        <Card>
+          <CardTitle icon={<Cpu className="h-4 w-4" />} right={<Link to="/environment" className="text-xs font-semibold text-primary">Environment →</Link>}>Devices</CardTitle>
+          <div className="grid grid-cols-3 gap-2">
+            <Device icon={<Fan className="h-5 w-5" />} label="Fans" value={connected ? `${hw?.fansOn ?? 0}/4 ON` : "—"} />
+            <Device icon={<Flame className="h-5 w-5" />} label="Heat" value={connected ? `${hw?.heatersOn ?? 0}/2 ON` : "—"} />
+            <Device icon={<Lightbulb className="h-5 w-5" />} label="Light" value={connected ? hw?.led ? "ON" : "OFF" : "—"} />
+          </div>
+          <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground"><Camera className="h-4 w-4" /> Camera: {hw?.camera?.connected ? "Connected" : "Unavailable"}</div>
+          <p className="mt-3 text-xs text-muted-foreground">Device states are Arduino-reported commands, not independent electrical feedback.</p>
+        </Card>
+      </div>
+      <Card>
+        <CardTitle>Historical trends</CardTitle>
+        <p className="text-sm text-muted-foreground">Historical temperature and feeding charts will appear after persistent data logging is connected. No sample readings are displayed as real history.</p>
       </Card>
     </div>
   );
 }
 
-function Mini({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl bg-surface p-3">
-      <div className="num text-xl font-bold">{value}</div>
-      <div className="text-[11px] text-muted-foreground">{label}</div>
-    </div>
-  );
+function formatDate(value?: string | null) {
+  if (!value) return "—";
+  const time = new Date(value);
+  return Number.isNaN(time.getTime()) ? "—" : time.toLocaleString();
 }
-function SmallStat({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
-  return (
-    <div className="rounded-xl border p-3">
-      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">{icon}{label}</div>
-      <div className="num mt-1 text-xl font-bold">{value}</div>
-    </div>
-  );
+function Stat({ label, value, icon }: { label: string; value: string; icon?: React.ReactNode }) {
+  return <div className="rounded-xl bg-surface p-3"><div className="flex items-center gap-1.5 text-xs text-muted-foreground">{icon}{label}</div><div className="mt-1 break-words text-lg font-bold">{value}</div></div>;
 }
-function DevChip({ icon, label, on, total, standby }: { icon: React.ReactNode; label: string; on: number; total: number; standby?: boolean }) {
-  const active = on > 0;
-  return (
-    <div className={`rounded-xl border p-3 text-center ${active ? "border-ok/30 bg-ok-soft text-ok" : "bg-surface text-muted-foreground"}`}>
-      <div className="flex justify-center">{icon}</div>
-      <div className="mt-1 text-xs font-semibold text-foreground">{label}</div>
-      <div className="text-[11px] font-bold">{active ? `ON ${on}/${total}` : standby ? "Standby" : "OFF"}</div>
-    </div>
-  );
+function Device({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+  return <div className="rounded-xl border bg-surface p-3 text-center"><div className="flex justify-center">{icon}</div><div className="mt-1 text-xs font-semibold">{label}</div><div className="mt-1 text-xs text-muted-foreground">{value}</div></div>;
 }

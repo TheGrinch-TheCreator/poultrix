@@ -13,6 +13,13 @@ import { type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
 import { AppShell } from "@/components/poultrix/AppShell";
+import { themeInitScript } from "@/lib/theme";
+import { Toaster } from "@/components/ui/sonner";
+import { supabase } from "@/integrations/supabase/client";
+import { useEffect, useState } from "react";
+import { getMyFarm } from "@/lib/farm-store";
+import { PageSkeleton } from "@/components/poultrix/PageSkeleton";
+import { useRef } from "react";
 
 function NotFoundComponent() {
   return (
@@ -34,6 +41,7 @@ function NotFoundComponent() {
 function ErrorComponent({ error, reset }: ErrorComponentProps) {
   console.error(error);
   const router = useRouter();
+
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <div className="max-w-md text-center">
@@ -79,7 +87,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         href: "https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Figtree:wght@400;500;600;700&display=swap",
       },
       { rel: "stylesheet", href: appCss },
-      { rel: "icon", href: "/poultrix-icon.svg", type: "image/svg+xml" },
+      { rel: "icon", href: "/favicon.png", type: "image/png" },
     ],
   }),
   shellComponent: RootShell,
@@ -90,9 +98,10 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 
 function RootShell({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <head>
         <HeadContent />
+        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
       </head>
       <body>
         {children}
@@ -103,13 +112,78 @@ function RootShell({ children }: { children: ReactNode }) {
 }
 
 function RootComponent() {
+  const router = useRouter();
   const { queryClient } = Route.useRouteContext();
   const path = useRouterState({ select: (s) => s.location.pathname });
-  const bare = path === "/login";
+  const bare = path === "/login" || path === "/farm-setup";
+  const [guard, setGuard] = useState<"checking" | "ready" | "error">("checking");
+  const [message, setMessage] = useState("");
+  const [attempt, setAttempt] = useState(0);
+  const pathRef = useRef(path);
+  pathRef.current = path;
+  const navigating = useRouterState({ select: (s) => s.isLoading });
+
+  useEffect(() => {
+    let alive = true;
+    const withTimeout = <T,>(promise: PromiseLike<T>, label: string): Promise<T> =>
+      Promise.race([
+        Promise.resolve(promise),
+        new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after 12 seconds. Check Supabase URL, network, and database policies.`)), 12000)),
+      ]);
+
+    setGuard("checking");
+    setMessage("");
+    (async () => {
+      try {
+        const { data, error } = await withTimeout(supabase.auth.getSession(), "Authentication");
+        if (error) throw error;
+        if (!alive) return;
+        if (!data.session) {
+          if (pathRef.current !== "/login") { await router.navigate({ to: "/login", replace: true }); return; }
+        } else {
+          const farm = await withTimeout(getMyFarm(), "Farm lookup");
+          if (!alive) return;
+          if (!farm && pathRef.current !== "/farm-setup") { await router.navigate({ to: "/farm-setup", replace: true }); return; }
+          if (farm && (pathRef.current === "/login" || pathRef.current === "/farm-setup")) { await router.navigate({ to: "/", replace: true }); return; }
+        }
+        if (alive) setGuard("ready");
+      } catch (err) {
+        console.error("Poultrix account check failed:", err);
+        if (alive) {
+          setMessage(err instanceof Error ? err.message : "Unable to check your account.");
+          setGuard("error");
+        }
+      }
+    })();
+    return () => { alive = false; };
+  }, [attempt, router]);
+
+  useEffect(() => {
+    const { data } = supabase.auth.onAuthStateChange((event) => {
+      if (event !== "SIGNED_IN" && event !== "SIGNED_OUT" && event !== "USER_UPDATED") return;
+      // Do not query Supabase from within the auth callback: it can deadlock token refresh.
+      router.invalidate();
+      setAttempt((n) => n + 1);
+      if (event !== "SIGNED_OUT") queryClient.invalidateQueries();
+    });
+    return () => data.subscription.unsubscribe();
+  }, [queryClient, router]);
 
   return (
     <QueryClientProvider client={queryClient}>
-      {bare ? <Outlet /> : <AppShell><Outlet /></AppShell>}
+      {guard === "checking" ? (
+        <div className="grid min-h-screen place-items-center text-sm text-muted-foreground">Checking your account…</div>
+      ) : guard === "error" ? (
+        <div className="flex min-h-screen items-center justify-center bg-background px-4">
+          <div className="w-full max-w-md space-y-4 rounded-xl border bg-card p-6 text-center">
+            <h1 className="text-xl font-semibold text-foreground">Account check failed</h1>
+            <p className="break-words text-sm text-muted-foreground">{message}</p>
+            <p className="text-xs text-muted-foreground">Check that your Supabase project is reachable and the farms table exists with the correct policies.</p>
+            <button type="button" onClick={() => setAttempt((n) => n + 1)} className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground">Try again</button>
+          </div>
+        </div>
+      ) : bare ? <Outlet /> : <AppShell>{navigating ? <PageSkeleton path={path} /> : <Outlet />}</AppShell>}
+      <Toaster position="top-center" richColors />
     </QueryClientProvider>
   );
 }

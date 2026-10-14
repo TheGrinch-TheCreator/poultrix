@@ -1,46 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
-import { alerts, envHistory, feedHistory } from "@/lib/demo-data";
-import { Card, CardTitle, DemoTag, PageHeader } from "@/components/poultrix/ui";
-import { FeedBars, MultiLine, TrendChart } from "@/components/poultrix/charts";
-
-export const Route = createFileRoute("/history")({
-  head: () => ({
-    meta: [
-      { title: "History & Reports — POULTRIX" },
-      { name: "description", content: "Review temperature, humidity, light, feeding and alert history for the current cycle." },
-      { property: "og:title", content: "History & Reports — POULTRIX" },
-      { property: "og:description", content: "Review temperature, humidity, light, feeding and alert history for the current cycle." },
-    ],
-  }),
-  component: HistoryPage,
-});
-
-const RANGES = ["Today", "Last 7 days", "Current cycle", "Custom"] as const;
-
-function HistoryPage() {
-  const [r, setR] = useState<(typeof RANGES)[number]>("Today");
-  return (
-    <>
-      <PageHeader title="History & Reports" subtitle="Look back at how the house and flock have been doing." right={<DemoTag />} />
-      <div className="mb-5 flex gap-2 overflow-x-auto">
-        {RANGES.map((x) => (
-          <button key={x} onClick={() => setR(x)} className={`shrink-0 rounded-full border px-4 py-2 text-sm font-semibold ${r === x ? "border-primary bg-primary text-primary-foreground" : "bg-card"}`}>{x}</button>
-        ))}
-      </div>
-      <div className="grid gap-5 lg:grid-cols-2">
-        <Card><CardTitle>Temperature & humidity</CardTitle><MultiLine data={envHistory} /></Card>
-        <Card><CardTitle>Light level</CardTitle><TrendChart data={envHistory} dataKey="light" color="var(--chart-3)" unit="" height={260} /></Card>
-        <Card className="lg:col-span-2"><CardTitle>Feed consumption & accuracy</CardTitle><FeedBars data={feedHistory} /></Card>
-      </div>
-      <Card className="mt-5">
-        <CardTitle>Event log</CardTitle>
-        <ul className="divide-y text-sm">
-          {alerts.map((a) => (
-            <li key={a.id} className="flex justify-between gap-3 py-3"><span>{a.title}</span><span className="shrink-0 text-muted-foreground">{a.time}</span></li>
-          ))}
-        </ul>
-      </Card>
-    </>
-  );
+import { useEffect, useState } from "react";
+import { supabase } from "@/integrations/supabase/client";
+import { getMyFarm } from "@/lib/farm-store";
+import { Card, CardTitle, PageHeader } from "@/components/poultrix/ui";
+import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
+export const Route = createFileRoute("/history")({component: HistoryPage});
+type Env = { id:number;recorded_at:string;temperature_c:number|null;humidity_pct:number|null;light_raw:number|null };
+type AI = {id:number;recorded_at:string;detected_stage:string|null;confidence_pct:number|null;status:string|null};
+type Feed = {id:number;recorded_at:string;stage:string|null;target_grams:number|null;estimated_dispensed_grams:number|null;outcome:string|null;event_type:string};
+function HistoryPage(){
+ const [days,setDays]=useState(1);const [env,setEnv]=useState<Env[]>([]);const [ai,setAI]=useState<AI[]>([]);const [feed,setFeed]=useState<Feed[]>([]);const [error,setError]=useState("");const [loading,setLoading]=useState(true);
+ useEffect(()=>{let active=true;setLoading(true);(async()=>{try{const farm=await getMyFarm();if(!farm)throw new Error("Farm not registered");const since=new Date(Date.now()-days*86400000).toISOString();const [e,a,f]=await Promise.all([supabase.from("environment_readings" as never).select("*").eq("farm_id",farm.id).gte("recorded_at",since).order("recorded_at",{ascending:false}).limit(1500),supabase.from("ai_checks" as never).select("*").eq("farm_id",farm.id).gte("recorded_at",since).order("recorded_at",{ascending:false}).limit(100),supabase.from("feed_events" as never).select("*").eq("farm_id",farm.id).gte("recorded_at",since).order("recorded_at",{ascending:false}).limit(200)]);if(e.error||a.error||f.error)throw e.error||a.error||f.error;if(active){setEnv((e.data??[]) as Env[]);setAI((a.data??[]) as AI[]);setFeed((f.data??[]) as Feed[]);setError("");}}catch(e){if(active)setError(e instanceof Error?e.message:"History unavailable");}finally{if(active)setLoading(false);}})();return()=>{active=false;};},[days]);
+ const series=[...env].reverse().map(x=>({time:new Date(x.recorded_at).toLocaleString(),temperature:x.temperature_c,humidity:x.humidity_pct,light:x.light_raw}));
+ return <><PageHeader title="History & Reports" subtitle="Saved readings from your farm's actual hardware"/><div className="mb-5 flex gap-2">{[1,7,30].map(n=><button key={n} onClick={()=>setDays(n)} className={`rounded-full border px-4 py-2 text-sm ${days===n?"bg-primary text-primary-foreground":"bg-card"}`}>{n===1?"24 hours":`${n} days`}</button>)}</div>{error&&<p className="mb-4 text-destructive">{error}</p>}{loading&&<p className="text-muted-foreground">Loading history…</p>}<div className="grid gap-5 lg:grid-cols-2"><Card><CardTitle>Temperature (°C) and humidity (%)</CardTitle><div className="h-64">{series.length?<ResponsiveContainer width="100%" height="100%"><LineChart data={series}><CartesianGrid strokeDasharray="3 3"/><XAxis dataKey="time" hide/><YAxis/><Tooltip/><Line type="monotone" dataKey="temperature" stroke="#dc7c30" dot={false} connectNulls={false}/><Line type="monotone" dataKey="humidity" stroke="#2563eb" dot={false} connectNulls={false}/></LineChart></ResponsiveContainer>:<p className="text-sm text-muted-foreground">No recorded readings yet</p>}</div></Card><Card><CardTitle>Light (raw LDR ADC)</CardTitle><div className="h-64">{series.length?<ResponsiveContainer width="100%" height="100%"><LineChart data={series}><XAxis dataKey="time" hide/><YAxis/><Tooltip/><Line type="monotone" dataKey="light" stroke="#d7a11e" dot={false} connectNulls={false}/></LineChart></ResponsiveContainer>:<p className="text-sm text-muted-foreground">No recorded readings yet</p>}</div></Card><Card><CardTitle>Recent AI checks</CardTitle><div className="max-h-80 overflow-auto text-sm">{ai.length?ai.map(x=><div className="flex justify-between gap-3 border-b py-2" key={x.id}><span>{x.detected_stage??"No stage"} · {x.confidence_pct?.toFixed(1)??"—"}% · {x.status??"—"}</span><span className="text-muted-foreground">{new Date(x.recorded_at).toLocaleString()}</span></div>):"No AI checks saved yet"}</div></Card><Card><CardTitle>Feeding events (estimated)</CardTitle><div className="max-h-80 overflow-auto text-sm">{feed.length?feed.map(x=><div className="flex justify-between gap-3 border-b py-2" key={x.id}><span>{x.event_type} · {x.stage??"—"} · target {x.target_grams??"—"} g · estimated {x.estimated_dispensed_grams??"—"} g · {x.outcome??"—"}</span><span className="text-muted-foreground">{new Date(x.recorded_at).toLocaleString()}</span></div>):"No feeding events saved yet"}</div></Card></div></>;
 }

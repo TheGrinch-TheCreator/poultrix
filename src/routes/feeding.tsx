@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Check, Wheat } from "lucide-react";
+import { Check } from "lucide-react";
 import { farm, feed, feedHistory, feedingEvents, stageInfo } from "@/lib/demo-data";
 import { Card, CardTitle, DemoTag, Meter, PageHeader, Pill, StageBadge } from "@/components/poultrix/ui";
 import { DeclarationForm, FeedHoldAlert, FeedSchedulePanel, FeedStockPanel, LeftoverNotice, MaeCard } from "@/components/poultrix/v3";
@@ -24,12 +24,6 @@ function FeedingPage() {
   return (
     <>
       <PageHeader title="Feeding" subtitle="POULTRIX picks the feed and amount from the AI growth stage." right={<DemoTag />} />
-      <div className="mb-5 flex flex-wrap items-center gap-3 rounded-xl border-2 border-ok/40 bg-ok-soft p-4">
-        <Wheat className="h-5 w-5 text-ok" />
-        <span className="font-display text-lg font-bold">Compartment {feed.activeCompartment} — {feed.type} — ACTIVE</span>
-        <StageBadge stage={farm.stage} />
-      </div>
-
       <div className="mb-5 space-y-3"><FeedHoldAlert /><LeftoverNotice /></div>
       <div className="mb-5 grid gap-5 lg:grid-cols-3">
         <FeedSchedulePanel />

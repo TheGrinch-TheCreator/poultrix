@@ -20,7 +20,7 @@ function MorePage() {
     <>
       <PageHeader title="Menu" />
       <div className="card-surface divide-y">
-        {[...NAV, { to: "/profile", label: "Profile", icon: UserRound } as const].map(({ to, label, icon: Icon }) => (
+        {[...NAV.filter((n) => !["/", "/feeding", "/environment", "/ai-stage"].includes(n.to)), { to: "/profile", label: "Profile", icon: UserRound } as const].map(({ to, label, icon: Icon }) => (
           <Link key={to} to={to} className="flex items-center gap-3 p-4 font-semibold">
             <Icon className="h-5 w-5 text-primary" /><span className="flex-1">{label}</span><ChevronRight className="h-4 w-4 text-muted-foreground" />
           </Link>

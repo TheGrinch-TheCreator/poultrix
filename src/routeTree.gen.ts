@@ -12,8 +12,10 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AiStageRouteImport } from './routes/ai-stage'
 import { Route as AlertsRouteImport } from './routes/alerts'
+import { Route as BypassRouteImport } from './routes/bypass'
 import { Route as CycleRouteImport } from './routes/cycle'
 import { Route as EnvironmentRouteImport } from './routes/environment'
+import { Route as FarmSetupRouteImport } from './routes/farm-setup'
 import { Route as FeedingRouteImport } from './routes/feeding'
 import { Route as FlockRouteImport } from './routes/flock'
 import { Route as HardwareRouteImport } from './routes/hardware'
@@ -38,6 +40,11 @@ const AlertsRoute = AlertsRouteImport.update({
   path: '/alerts',
   getParentRoute: () => rootRouteImport,
 } as any)
+const BypassRoute = BypassRouteImport.update({
+  id: '/bypass',
+  path: '/bypass',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const CycleRoute = CycleRouteImport.update({
   id: '/cycle',
   path: '/cycle',
@@ -46,6 +53,11 @@ const CycleRoute = CycleRouteImport.update({
 const EnvironmentRoute = EnvironmentRouteImport.update({
   id: '/environment',
   path: '/environment',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const FarmSetupRoute = FarmSetupRouteImport.update({
+  id: '/farm-setup',
+  path: '/farm-setup',
   getParentRoute: () => rootRouteImport,
 } as any)
 const FeedingRoute = FeedingRouteImport.update({
@@ -93,8 +105,10 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/ai-stage': typeof AiStageRoute
   '/alerts': typeof AlertsRoute
+  '/bypass': typeof BypassRoute
   '/cycle': typeof CycleRoute
   '/environment': typeof EnvironmentRoute
+  '/farm-setup': typeof FarmSetupRoute
   '/feeding': typeof FeedingRoute
   '/flock': typeof FlockRoute
   '/hardware': typeof HardwareRoute
@@ -108,8 +122,10 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/ai-stage': typeof AiStageRoute
   '/alerts': typeof AlertsRoute
+  '/bypass': typeof BypassRoute
   '/cycle': typeof CycleRoute
   '/environment': typeof EnvironmentRoute
+  '/farm-setup': typeof FarmSetupRoute
   '/feeding': typeof FeedingRoute
   '/flock': typeof FlockRoute
   '/hardware': typeof HardwareRoute
@@ -124,8 +140,10 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/ai-stage': typeof AiStageRoute
   '/alerts': typeof AlertsRoute
+  '/bypass': typeof BypassRoute
   '/cycle': typeof CycleRoute
   '/environment': typeof EnvironmentRoute
+  '/farm-setup': typeof FarmSetupRoute
   '/feeding': typeof FeedingRoute
   '/flock': typeof FlockRoute
   '/hardware': typeof HardwareRoute
@@ -141,8 +159,10 @@ export interface FileRouteTypes {
     | '/'
     | '/ai-stage'
     | '/alerts'
+    | '/bypass'
     | '/cycle'
     | '/environment'
+    | '/farm-setup'
     | '/feeding'
     | '/flock'
     | '/hardware'
@@ -156,8 +176,10 @@ export interface FileRouteTypes {
     | '/'
     | '/ai-stage'
     | '/alerts'
+    | '/bypass'
     | '/cycle'
     | '/environment'
+    | '/farm-setup'
     | '/feeding'
     | '/flock'
     | '/hardware'
@@ -171,8 +193,10 @@ export interface FileRouteTypes {
     | '/'
     | '/ai-stage'
     | '/alerts'
+    | '/bypass'
     | '/cycle'
     | '/environment'
+    | '/farm-setup'
     | '/feeding'
     | '/flock'
     | '/hardware'
@@ -187,8 +211,10 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AiStageRoute: typeof AiStageRoute
   AlertsRoute: typeof AlertsRoute
+  BypassRoute: typeof BypassRoute
   CycleRoute: typeof CycleRoute
   EnvironmentRoute: typeof EnvironmentRoute
+  FarmSetupRoute: typeof FarmSetupRoute
   FeedingRoute: typeof FeedingRoute
   FlockRoute: typeof FlockRoute
   HardwareRoute: typeof HardwareRoute
@@ -222,6 +248,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AlertsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/bypass': {
+      id: '/bypass'
+      path: '/bypass'
+      fullPath: '/bypass'
+      preLoaderRoute: typeof BypassRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/cycle': {
       id: '/cycle'
       path: '/cycle'
@@ -234,6 +267,13 @@ declare module '@tanstack/react-router' {
       path: '/environment'
       fullPath: '/environment'
       preLoaderRoute: typeof EnvironmentRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/farm-setup': {
+      id: '/farm-setup'
+      path: '/farm-setup'
+      fullPath: '/farm-setup'
+      preLoaderRoute: typeof FarmSetupRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/feeding': {
@@ -299,8 +339,10 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AiStageRoute: AiStageRoute,
   AlertsRoute: AlertsRoute,
+  BypassRoute: BypassRoute,
   CycleRoute: CycleRoute,
   EnvironmentRoute: EnvironmentRoute,
+  FarmSetupRoute: FarmSetupRoute,
   FeedingRoute: FeedingRoute,
   FlockRoute: FlockRoute,
   HardwareRoute: HardwareRoute,
