@@ -1,0 +1,9 @@
+{
+  "name": "poultrix-telemetry",
+  "main": "worker.js",
+  "compatibility_date": "2026-10-15",
+  "durable_objects": {
+    "bindings": [{ "name": "TELEMETRY", "class_name": "TelemetryStore" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TelemetryStore"] }]
+}
