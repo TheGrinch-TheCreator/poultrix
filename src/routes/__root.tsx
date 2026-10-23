@@ -111,12 +111,16 @@ function RootShell({ children }: { children: ReactNode }) {
   );
 }
 
+// Keep the verified account view during client-side route remounts.
+// This cache is per browser page load, not persisted across reloads.
+let accountVerifiedThisPage = false;
+
 function RootComponent() {
   const router = useRouter();
   const { queryClient } = Route.useRouteContext();
   const path = useRouterState({ select: (s) => s.location.pathname });
   const bare = path === "/login" || path === "/farm-setup";
-  const [guard, setGuard] = useState<"checking" | "ready" | "error">("checking");
+  const [guard, setGuard] = useState<"checking" | "ready" | "error">(accountVerifiedThisPage ? "ready" : "checking");
   const [message, setMessage] = useState("");
   const [attempt, setAttempt] = useState(0);
   const pathRef = useRef(path);
@@ -131,7 +135,8 @@ function RootComponent() {
         new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after 12 seconds. Check Supabase URL, network, and database policies.`)), 12000)),
       ]);
 
-    setGuard("checking");
+    // Revalidate in the background after initial verification; do not blank every page.
+    if (!accountVerifiedThisPage) setGuard("checking");
     setMessage("");
     (async () => {
       try {
@@ -139,6 +144,7 @@ function RootComponent() {
         if (error) throw error;
         if (!alive) return;
         if (!data.session) {
+          accountVerifiedThisPage = false;
           if (pathRef.current !== "/login") { await router.navigate({ to: "/login", replace: true }); return; }
         } else {
           const farm = await withTimeout(getMyFarm(), "Farm lookup");
@@ -146,12 +152,15 @@ function RootComponent() {
           if (!farm && pathRef.current !== "/farm-setup") { await router.navigate({ to: "/farm-setup", replace: true }); return; }
           if (farm && (pathRef.current === "/login" || pathRef.current === "/farm-setup")) { await router.navigate({ to: "/", replace: true }); return; }
         }
-        if (alive) setGuard("ready");
+        if (alive) {
+          accountVerifiedThisPage = true;
+          setGuard("ready");
+        }
       } catch (err) {
         console.error("Poultrix account check failed:", err);
         if (alive) {
           setMessage(err instanceof Error ? err.message : "Unable to check your account.");
-          setGuard("error");
+          if (!accountVerifiedThisPage) setGuard("error");
         }
       }
     })();
@@ -162,6 +171,10 @@ function RootComponent() {
     const { data } = supabase.auth.onAuthStateChange((event) => {
       if (event !== "SIGNED_IN" && event !== "SIGNED_OUT" && event !== "USER_UPDATED") return;
       // Do not query Supabase from within the auth callback: it can deadlock token refresh.
+      if (event === "SIGNED_OUT") {
+        accountVerifiedThisPage = false;
+        setGuard("checking");
+      }
       router.invalidate();
       setAttempt((n) => n + 1);
       if (event !== "SIGNED_OUT") queryClient.invalidateQueries();
