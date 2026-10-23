@@ -125,7 +125,7 @@ function Dashboard() {
           <CardTitle icon={<Cpu className="h-4 w-4" />} right={<Link to="/environment" className="text-xs font-semibold text-primary">Environment →</Link>}>Devices</CardTitle>
           <div className="grid grid-cols-3 gap-2">
             <Device icon={<Fan className="h-5 w-5" />} label="Fans" value={connected ? `${hw?.fansOn ?? 0}/4 ON` : "—"} />
-            <Device icon={<Flame className="h-5 w-5" />} label="Heat" value={connected ? `${hw?.heatersOn ?? 0}/2 ON` : "—"} />
+            <Device icon={<Flame className="h-5 w-5" />} label="Heat" value={connected ? `${(hw?.heatersOn ?? 0) > 0 ? 1 : 0}/1 relay ON` : "—"} />
             <Device icon={<Lightbulb className="h-5 w-5" />} label="Light" value={connected ? hw?.led ? "ON" : "OFF" : "—"} />
           </div>
           <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground"><Camera className="h-4 w-4" /> Camera: {hw?.camera?.connected ? "Connected" : "Unavailable"}</div>

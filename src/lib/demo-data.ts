@@ -102,7 +102,7 @@ export const hardware: { group: string; items: { name: string; plain: string; st
     items: [
       { name: "8-channel relay", plain: "Power switches", status: "ok", detail: "2 of 8 on", last: "2s ago" },
       { name: "4 exhaust fans", plain: "Cooling", status: "ok", detail: "All OFF", last: "2s ago" },
-      { name: "2 heat lamps", plain: "Warming", status: "ok", detail: "All OFF", last: "2s ago" },
+      { name: "Heater relay (2 lamps)", plain: "Warming", status: "ok", detail: "All OFF", last: "2s ago" },
       { name: "2 LED lights", plain: "Lighting", status: "ok", detail: "Both ON", last: "2s ago" },
     ],
   },

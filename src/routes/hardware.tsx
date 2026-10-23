@@ -104,7 +104,7 @@ function HardwarePage() {
     ] },
     { title: "Environmental controls", components: [
       ...Array.from({ length: 4 }, (_, i): Component => ({ name: `Cooling fan ${i + 1}`, detail: "Arduino-reported relay command; not physical feedback", condition: actuator(fans?.[i]) })),
-      ...Array.from({ length: 2 }, (_, i): Component => ({ name: `Heater ${i + 1}`, detail: "Arduino-reported relay command; not physical feedback", condition: actuator(heaters?.[i]) })),
+      { name: "Heater relay (2 lamps, D28 / IN7)", detail: "Arduino-reported relay command; not physical feedback", condition: actuator(heaters?.[0] ?? (online && typeof hw?.heatersOn === "number" ? hw.heatersOn > 0 : undefined)) },
       { name: "Lighting tube", detail: "Arduino-reported relay command; not physical feedback", condition: actuator(online ? hw?.led : undefined) },
     ] },
     { title: "Feeding hardware", components: [
