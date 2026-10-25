@@ -1,9 +1,13 @@
+
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "poultrix",
   "main": "./dist/server/server.js",
   "compatibility_date": "2026-10-25",
   "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "SUPABASE_URL": "https://sutmrdrkhnxouyhdzoxv.supabase.co"
+  },
   "assets": {
     "directory": "./dist/client",
     "binding": "ASSETS"
