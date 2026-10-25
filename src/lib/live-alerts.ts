@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { API_URL } from "@/lib/live-hardware";
+import { supabase } from "@/integrations/supabase/client";
 
 export type LiveAlert = { id: string; severity: "critical" | "warning" | "info"; title: string; description: string; action: string };
 type Snapshot = { health: any; status: any; ai: any; weight: any; feeding: any; errors: Record<string,string> };
-const ACK_KEY = "poultrix.acknowledged-live-alerts.v1";
+
 const POLL_MS = 3000;
 const listeners = new Set<() => void>();
 let snapshot: Snapshot | null = null;
@@ -12,11 +13,35 @@ let subscribers = 0;
 let timer: ReturnType<typeof setInterval> | undefined;
 let inFlight = false;
 let acknowledgements: Record<string, boolean> = {};
-let initialized = false;
-function init() {
-  if (initialized || typeof window === "undefined") return;
-  initialized = true;
-  try { acknowledgements = JSON.parse(localStorage.getItem(ACK_KEY) || "{}"); } catch { acknowledgements = {}; }
+let ackError: string | null = null;
+async function syncAcks() {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) throw new Error("Sign in to synchronize alerts");
+    const r = await fetch('/api/alerts/acknowledgements', {
+      headers: { Authorization: `Bearer ${session.access_token}` }, cache: 'no-store',
+    });
+    const payload = await r.json();
+    if (!r.ok) throw new Error(payload.error || `HTTP ${r.status}`);
+    acknowledgements = Object.fromEntries((payload.acknowledgements || []).map((a: {alert_id:string}) => [a.alert_id, true]));
+    ackError = null;
+  } catch (e) { ackError = e instanceof Error ? e.message : "Acknowledgements unavailable"; }
+  emit();
+}
+async function mutateAck(id: string, method: 'POST' | 'DELETE') {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.access_token) { ackError = "Sign in to acknowledge alerts"; emit(); return; }
+  try {
+    const r = await fetch('/api/alerts/acknowledgements', {
+      method, headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }), cache: 'no-store',
+    });
+    const payload = await r.json();
+    if (!r.ok) throw new Error(payload.error || `HTTP ${r.status}`);
+    acknowledgements = Object.fromEntries((payload.acknowledgements || []).map((a: {alert_id:string}) => [a.alert_id, true]));
+    ackError = null;
+  } catch (e) { ackError = e instanceof Error ? e.message : "Unable to save acknowledgement"; }
+  emit();
 }
 function emit() { listeners.forEach(fn => fn()); }
 async function fetchJson(path: string) {
@@ -44,16 +69,10 @@ async function refresh() {
     const accessible = !!next.status || !!next.health;
     if (accessible) lastSuccessful = true;
     snapshot = next;
-    const current = new Set(deriveAlerts(next).map(a => a.id));
-    let changed = false;
-    for (const id of Object.keys(acknowledgements)) {
-      if (!current.has(id)) { delete acknowledgements[id]; changed = true; }
-    }
-    if (changed) saveAck();
+    await syncAcks();
     emit();
   } finally { inFlight = false; }
 }
-function saveAck() { try { localStorage.setItem(ACK_KEY, JSON.stringify(acknowledgements)); } catch {} }
 function add(out: LiveAlert[], id: string, severity: LiveAlert["severity"], title: string, description: string, action: string) {
   if (!out.some(a => a.id === id)) out.push({ id, severity, title, description, action });
 }
@@ -100,20 +119,17 @@ function deriveAlerts(s: Snapshot | null): LiveAlert[] {
   });
   return out;
 }
-export function acknowledgeLiveAlert(id: string) { init(); acknowledgements[id] = true; saveAck(); emit(); }
-export function restoreLiveAlert(id: string) { init(); delete acknowledgements[id]; saveAck(); emit(); }
+export async function acknowledgeLiveAlert(id: string) { await mutateAck(id, 'POST'); }
+export async function restoreLiveAlert(id: string) { await mutateAck(id, 'DELETE'); }
 export function useLiveAlerts() {
   const [revision, setRevision] = useState(0);
   useEffect(() => {
-    init();
     const notify = () => setRevision(v => v + 1);
     listeners.add(notify); subscribers++;
     if (subscribers === 1) { void refresh(); timer = setInterval(() => void refresh(), POLL_MS); }
-    const onStorage = (e: StorageEvent) => { if (e.key === ACK_KEY) { try { acknowledgements = JSON.parse(e.newValue || "{}"); } catch { acknowledgements = {}; } emit(); } };
-    window.addEventListener("storage", onStorage);
-    return () => { listeners.delete(notify); subscribers--; window.removeEventListener("storage", onStorage); if (subscribers === 0) { clearInterval(timer); timer = undefined; } };
+    return () => { listeners.delete(notify); subscribers--; if (subscribers === 0) { clearInterval(timer); timer = undefined; } };
   }, []);
   void revision;
   const all = deriveAlerts(snapshot);
-  return { alerts: all.filter(a => !acknowledgements[a.id]), acknowledged: all.filter(a => !!acknowledgements[a.id]), count: all.filter(a => !acknowledgements[a.id]).length, loading: !snapshot, lastSuccessful };
+  return { alerts: all.filter(a => !acknowledgements[a.id]), acknowledged: all.filter(a => !!acknowledgements[a.id]), count: all.filter(a => !acknowledgements[a.id]).length, loading: !snapshot, lastSuccessful, ackError };
 }
