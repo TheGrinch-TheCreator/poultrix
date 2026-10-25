@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "poultrix",
+  "main": "./dist/server/server.js",
+  "compatibility_date": "2026-10-25",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./dist/client",
+    "binding": "ASSETS"
+  },
+  "vpc_services": [
+    {
+      "binding": "POULTRIX_HISTORY",
+      "service_id": "01a173a1-c124-72f0-97e9-a6a735132374"
+    }
+  ]
+}
