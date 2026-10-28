@@ -13,7 +13,7 @@ function BypassPage() {
   const [token, setToken] = useState(() => { try { return localStorage.getItem(SESSION_KEY) || ""; } catch { return ""; } });
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("Maintenance controls are inactive.");
-  const [seconds, setSeconds] = useState("2");
+  const [seconds, setSeconds] = useState("0.5");
   const [stage, setStage] = useState("STARTER");
   const [values, setValues] = useState({temperature:"",ldr:"",hopper:"",trough:""});
   const [relayState, setRelayState] = useState<Record<number, boolean>>({});
@@ -64,18 +64,22 @@ function BypassPage() {
         setRelayState(Object.fromEntries(result.relays.map((v:boolean,i:number)=>[i+1,Boolean(v)])));
         setRelayReady(true);
       }
-    }).catch(()=>{clearSession();setRelayReady(false);setMessage("Maintenance session expired; controls locked.");});
+    }).catch((error)=>{
+      setStatus(null); setRelayReady(false);
+      if (String(error).includes("Unauthorized")) { clearSession(); setMessage("Maintenance session expired or revoked; please sign in again."); }
+      else setMessage("Unable to reach Raspberry Pi. Session saved; controls disabled until connection returns.");
+    });
     refresh();
     const id=window.setInterval(refresh,4000);
     return ()=>window.clearInterval(id);
   },[token]);
   async function analyseReal(){setBusy(true);try{await call("analyse-real");setMessage("Real camera analysis completed; simulation cleared.");setStatus(null);}catch(e){setMessage(e instanceof Error?e.message:String(e));}finally{setBusy(false);}}
-  async function login(){setBusy(true);try{const r=await call("login",{password},"");setToken(r.token);try { localStorage.setItem(SESSION_KEY,r.token); } catch {} setPassword("");setMessage("Maintenance active. Auto-expires after five minutes without commands.");}catch(e){setMessage(e instanceof Error?e.message:String(e));}finally{setBusy(false);}}
+  async function login(){setBusy(true);try{const r=await call("login",{password},"");setToken(r.token);try { localStorage.setItem(SESSION_KEY,r.token); } catch {} setPassword("");setMessage("Maintenance active. Session retained across navigation and refresh; expires after eight hours or when exited.");}catch(e){setMessage(e instanceof Error?e.message:String(e));}finally{setBusy(false);}}
   return <>
     <PageHeader title="Maintenance" subtitle="Manual bypass • Authorized use only" />
     <p className="mb-4 text-xs text-muted-foreground">Hidden from navigation. This page does not replace authentication or physical emergency controls.</p>
     {!token ? <Card><CardTitle>Unlock maintenance controls</CardTitle><div className="mt-4 flex flex-wrap gap-2"><input aria-label="Maintenance password" type="password" autoComplete="off" className={inputClass+" max-w-sm"} value={password} onChange={e=>setPassword(e.target.value)} placeholder="Maintenance password"/><button className={btn} disabled={busy||!password} onClick={login}>Enter bypass</button></div></Card> : <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3"><div><b>Manual bypass active</b><p className="text-xs text-muted-foreground">{status?.expiresSeconds ?? 300}s remaining · Fan/LED states preserved on entry; outputs reset on exit</p></div><div className="flex flex-wrap gap-2"><button className={btn} disabled={busy} onClick={()=>perform("exit")}>Exit bypass & close gates</button><button className={btn+" border-green-600 text-green-700"} disabled={busy} onClick={()=>{if(window.confirm("Clear all manual overrides and request LIVE mode? Check that fans and lights can activate automatically."))perform("return-live");}}>Return to LIVE Mode</button></div></div>
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3"><div><b>Manual bypass active</b><p className="text-xs text-muted-foreground">{status?.expiresSeconds != null ? `${Math.ceil(status.expiresSeconds / 60)} min remaining` : "Checking session…"} · Fan/LED states preserved on entry; outputs reset on exit</p></div><div className="flex flex-wrap gap-2"><button className={btn} disabled={busy} onClick={()=>perform("exit")}>Exit bypass & close gates</button><button className={btn+" border-green-600 text-green-700"} disabled={busy} onClick={()=>{if(window.confirm("Clear all manual overrides and request LIVE mode? Check that fans and lights can activate automatically."))perform("return-live");}}>Return to LIVE Mode</button></div></div>
       <Card><CardTitle>Servo control — 2 compartments (10 servos)</CardTitle>
         <p className="my-2 text-xs text-muted-foreground">Supervised timed group dispensing. One PCA9685 driver controls all 10 servos. Closed: 0° · Open: 90°. Arduino automatically closes the selected group after the requested duration (maximum 1.5 seconds). Only one group may run at a time. Keep feed compartments empty for initial testing.</p>
         <label className="block max-w-xs text-sm">Requested duration (seconds)
