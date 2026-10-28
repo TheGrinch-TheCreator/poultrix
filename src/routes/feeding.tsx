@@ -1,107 +1,66 @@
-import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { Wheat, RefreshCw } from "lucide-react";
-import { Card, CardTitle, PageHeader, Pill } from "@/components/poultrix/ui";
-import { API_URL, useHardware } from "@/lib/live-hardware";
-import { formatWeight, readingStatus, formatReadingTime, type WeightPayload } from "@/lib/live-weights";
-import { SERVO_COMPARTMENTS, servoReading, type ServoTelemetry } from "@/lib/servo-compartments";
+import { API_URL } from "@/lib/live-hardware";
+
+type Feed = { id:string; name:string; stages:string[] };
+type Compartment = { id:number; feedId:string; feed:Feed|null; estimatedGrams:number|null; lowFeed:boolean; stageCompatible:boolean };
+type Inventory = { feeds:Feed[]; compartments:Compartment[]; confirmedStage:string; eligibleCompartments:number[]; selectedCompartment:number|null; combinedActualGrams:number|null; combinedWeightStatus:string|null; combinedEstimatedGrams:number|null; discrepancyGrams:number|null; automaticFeedingEnabled:boolean; alerts:{type:string;message:string;compartment?:number}[];refills:{compartment:number;kilograms:number;timestamp:string}[] };
+
+function LiveCompartmentManager(){
+ const [data,setData]=useState<Inventory|null>(null);
+ const [error,setError]=useState("");
+ const [busy,setBusy]=useState(false);
+ const [refills,setRefills]=useState<Record<number,string>>({1:"",2:""});
+ const [name,setName]=useState("");
+ const [stages,setStages]=useState<string[]>([]);
+ const [starting,setStarting]=useState<Record<number,string>>({1:"",2:""});
+ const load=async()=>{try{const r=await fetch(`${API_URL}/api/feeding/inventory`,{cache:"no-store"});if(!r.ok)throw Error(`Backend HTTP ${r.status}`);setData(await r.json());setError("");}catch(e){setError(e instanceof Error?e.message:"Connection failed");}};
+ useEffect(()=>{void load();const timer=setInterval(()=>void load(),5000);return()=>clearInterval(timer);},[]);
+ const post=async(path:string,payload:unknown)=>{setBusy(true);try{const r=await fetch(`${API_URL}/api/feeding/inventory/${path}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});const result=await r.json();if(!r.ok)throw Error(result.error||`HTTP ${r.status}`);setError("");await load();}catch(e){setError(e instanceof Error?e.message:"Operation failed");}finally{setBusy(false);}};
+ const kg=(v:number|null)=>v===null?"Not initialized":`${(v/1000).toFixed(2)} kg estimated`;
+ return <section className="mb-6 space-y-4">
+  <div><h2 className="text-xl font-bold">Feed compartments</h2><p className="text-sm text-muted-foreground">Independent feed assignments and refill ledger • physical dispensing locked during calibration</p></div>
+  {error&&<div role="alert" className="rounded-lg border border-red-400 p-3 text-sm text-red-600">{error}</div>}
+  <div className="grid gap-4 md:grid-cols-2">
+  {[1,2].map(id=>{const c=data?.compartments.find(x=>x.id===id);const green=id===1;return <div key={id} className="rounded-2xl border p-5 space-y-4" style={{borderColor:green?"#8acb32":"#f59a30",background:green?"rgba(138,203,50,.07)":"rgba(245,154,48,.07)"}}>
+   <div className="flex items-center gap-3"><span className="h-5 w-5 rounded-md" style={{background:green?"#8acb32":"#f59a30"}}/><h3 className="font-bold">Compartment {id}</h3></div>
+   <label className="block text-sm font-medium">Feed type</label>
+   <select aria-label={`Compartment ${id} feed`} className="w-full rounded-lg border bg-background p-2" disabled={busy||!data} value={c?.feedId||""} onChange={e=>void post("assign",{compartment:id,feedId:e.target.value})}>{data?.feeds.map(f=><option key={f.id} value={f.id}>{f.name} — {f.stages.join("/")}</option>)}</select>
+   <p className="text-sm">{kg(c?.estimatedGrams??null)}</p>
+   <p className="text-xs text-muted-foreground">Estimated from refill records, not individually measured by a load cell.</p>
+   <p className={`text-sm font-medium ${c?.stageCompatible?"text-green-700":"text-orange-700"}`}>{c?.stageCompatible?"Compatible with confirmed stage":"Not compatible with confirmed stage"}</p>
+   {c?.lowFeed&&<p className="text-sm font-semibold text-red-600">Low estimated feed — refill soon</p>}
+   <div className="flex gap-2"><input aria-label={`Refill compartment ${id} kilograms`} type="number" min="0.01" max="100" step="0.01" placeholder="Refill kg" className="min-w-0 flex-1 rounded-lg border bg-background p-2" value={refills[id]} onChange={e=>setRefills(p=>({...p,[id]:e.target.value}))}/><button className="rounded-lg bg-primary px-3 py-2 text-primary-foreground disabled:opacity-50" disabled={busy||!data||!(Number(refills[id])>0)} onClick={()=>{if(window.confirm(`Confirm adding ${refills[id]} kg to compartment ${id}?`))void post("refill",{compartment:id,kilograms:Number(refills[id])}).then(()=>setRefills(p=>({...p,[id]:""})));}}>Record refill</button></div>
+   <p className="text-xs text-muted-foreground">Five servos • PCA9685 {id===1?"CH 0–4":"CH 11–15"} • closed 0°, open 90°</p>
+  </div>})}
+  </div>
+  <div className="rounded-xl border p-4 space-y-2"><h3 className="font-semibold">Combined hopper sensor</h3><p className="text-lg font-bold">{data?.combinedActualGrams==null?"Actual weight unavailable":`${(data.combinedActualGrams/1000).toFixed(2)} kg actual`}</p><p className="text-sm">Combined inventory estimate: {kg(data?.combinedEstimatedGrams??null)}</p><p className="text-sm">Confirmed chicken stage: {data?.confirmedStage||"Unknown"} • Eligible compartment(s): {data?.eligibleCompartments.join(", ")||"None"}</p>{data?.discrepancyGrams!=null&&<p className="text-sm">Actual minus estimated: {(data.discrepancyGrams/1000).toFixed(2)} kg</p>}{data?.alerts.map((a,i)=><p key={i} role="status" className="text-sm text-orange-700">{a.message}{a.compartment?` (Compartment ${a.compartment})`:""}</p>)}</div>
+  {data?.compartments.some(c=>c.estimatedGrams===null)&&<div className="rounded-xl border p-4 space-y-3"><h3 className="font-semibold">Initialize verified starting stock</h3><p className="text-xs text-muted-foreground">Enter the measured feed quantities in BOTH compartments before using refill tracking. This replaces prior estimates.</p><div className="grid grid-cols-2 gap-3">{[1,2].map(id=><label key={id} className="text-sm">Compartment {id} (kg)<input type="number" min="0" max="100" step="0.01" className="mt-1 w-full rounded-lg border bg-background p-2" value={starting[id]} onChange={e=>setStarting(p=>({...p,[id]:e.target.value}))}/></label>)}</div><button className="rounded-lg border px-3 py-2 disabled:opacity-50" disabled={busy||[1,2].some(id=>starting[id]===""||!Number.isFinite(Number(starting[id]))||Number(starting[id])<0)} onClick={()=>{if(window.confirm("Confirm both starting quantities are verified?"))void post("initialize",{kilograms:[Number(starting[1]),Number(starting[2])]});}}>Initialize inventory</button></div>}
+  <div className="rounded-xl border p-4 space-y-3"><h3 className="font-semibold">Create custom feed</h3><input aria-label="Custom feed name" className="w-full rounded-lg border bg-background p-2" placeholder="Custom feed name" value={name} onChange={e=>setName(e.target.value)}/><p className="text-sm">Confirm the stages this feed is suitable for:</p><div className="flex flex-wrap gap-4">{["STARTER","GROWER","FINISHER"].map(s=><label key={s} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={stages.includes(s)} onChange={e=>setStages(p=>e.target.checked?[...p,s]:p.filter(v=>v!==s))}/>{s}</label>)}</div><button className="rounded-lg border px-3 py-2 disabled:opacity-50" disabled={busy||!name.trim()||!stages.length} onClick={()=>void post("feed",{name:name.trim(),stages}).then(()=>{setName("");setStages([]);})}>Save custom feed</button></div>
+  <p className="text-xs text-muted-foreground">Refill quantities are user-entered estimates. Automatic dispensing is disabled until servo travel, dispense rates, and inventory reconciliation are calibrated.</p>
+ </section>;
+}
+
+import { createFileRoute } from "@tanstack/react-router";
+import { Check } from "lucide-react";
+import { farm, feed, feedHistory, feedingEvents, stageInfo } from "@/lib/demo-data";
+import { Card, CardTitle, DemoTag, Meter, PageHeader, Pill, StageBadge } from "@/components/poultrix/ui";
+import { DeclarationForm, FeedHoldAlert, FeedSchedulePanel, FeedStockPanel, LeftoverNotice, MaeCard } from "@/components/poultrix/v3";
+import { FeedBars } from "@/components/poultrix/charts";
 
 export const Route = createFileRoute("/feeding")({
-  head: () => ({ meta: [{ title: "Feeding — POULTRIX" }, { name: "description", content: "Live Arduino feed weight and dispensing status." }] }),
+  head: () => ({
+    meta: [
+      { title: "Feeding — POULTRIX" },
+      { name: "description", content: "Stage-based feed dispensing, compartment levels, trough weight and feeding accuracy." },
+      { property: "og:title", content: "Feeding — POULTRIX" },
+      { property: "og:description", content: "Stage-based feed dispensing, compartment levels, trough weight and feeding accuracy." },
+    ],
+  }),
   component: FeedingPage,
 });
 
-type Gate = { status?: string; durationMs?: number; estimatedGrams?: number | null; updatedAt?: string | null };
-type FeedingStatus = { connected?: boolean; gates?: Record<string, Gate>; pending?: { gate?: number; durationMs?: number } | null; events?: unknown[] };
-
-function useLiveEndpoint<T>(path: string) {
-  const [data, setData] = useState<T | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    let active = true;
-    let busy = false;
-    const load = async () => {
-      if (busy) return;
-      busy = true;
-      try {
-        const response = await fetch(`${API_URL}${path}`, { cache: "no-store" });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const value = await response.json() as T;
-        if (active) { setData(value); setError(null); }
-      } catch (cause) {
-        if (active) { setData(null); setError(cause instanceof Error ? cause.message : "Connection unavailable"); }
-      } finally { busy = false; }
-    };
-    void load();
-    const interval = setInterval(() => void load(), 3000);
-    return () => { active = false; clearInterval(interval); };
-  }, [path]);
-  return { data, error };
-}
+const STEPS = ["Growth stage", "Feed type", "Target amount", "Gates open", "Weighing", "Target reached", "Complete"];
 
 function FeedingPage() {
-  const { data: hw, error: hardwareError } = useHardware();
-  const { data: weight, error: weightError } = useLiveEndpoint<WeightPayload>("/api/feeding/weight");
-  const { data: feeding, error: feedingError } = useLiveEndpoint<FeedingStatus>("/api/feeding/status");
-  const { data: servos } = useLiveEndpoint<ServoTelemetry>("/api/servos/status");
-  const gates = Object.entries(feeding?.gates ?? {});
-  const dispensing = gates.some(([, gate]) => gate.status?.toUpperCase() === "DISPENSING");
-  const connected = hw?.connected === true && !hardwareError;
-  return (
-    <div className="space-y-5">
-      <PageHeader title="Feeding" subtitle="Live Arduino load-cell readings and reported feeding states. No simulated feeding data." />
-      <Card>
-        <CardTitle icon={<Wheat className="h-4 w-4" />} right={<Pill tone={connected ? "ok" : "warn"}>{connected ? "Arduino connected" : "Arduino unavailable"}</Pill>}>Live feeding monitoring</CardTitle>
-        <p className="text-sm text-muted-foreground">Mode: {connected ? hw?.mode?.toUpperCase() || "Unknown" : "Unavailable"}. Weight values come from Arduino calibration; the web app does not recalibrate them.</p>
-        <p className="mt-2 flex items-center gap-2 text-xs text-muted-foreground"><RefreshCw className="h-3.5 w-3.5" /> Updates every 3 seconds.</p>
-      </Card>
-      <div className="grid gap-5 md:grid-cols-2">
-        {([ ["Hopper", weight?.hopper], ["Trough", weight?.trough] ] as const).map(([name, reading]) => (
-          <Card key={name}>
-            <CardTitle>{name} weight</CardTitle>
-            <div className="num mt-2 text-4xl font-extrabold">{formatWeight(reading)}</div>
-            <p className="mt-2 text-sm text-muted-foreground">{weightError ? `Weight API: ${weightError}` : readingStatus(reading)}</p>
-            <p className="mt-1 text-xs text-muted-foreground">{formatReadingTime(reading)}</p>
-          </Card>
-        ))}
-      </div>
-      {!weightError && weight && !weight.hopper && !weight.trough && <Card><p className="text-sm text-amber-600">Separate hopper/trough readings are not present in the API response. Check Raspberry Pi serial parsing; no combined weight is presented as a compartment measurement.</p></Card>}
-      <Card>
-        <CardTitle>Dispensing status</CardTitle>
-        <div className="mt-2 text-2xl font-bold">{feedingError || !feeding?.connected ? "Unavailable" : dispensing ? "Dispensing" : feeding.pending ? "Starting" : gates.length ? "Not dispensing" : "Waiting for status"}</div>
-        {feedingError && <p className="mt-2 text-sm text-destructive">Feeding API: {feedingError}</p>}
-        <div className="mt-4 grid gap-3 sm:grid-cols-3">
-          {["1", "2", "3"].map(id => {
-            const gate = feeding?.gates?.[id] ?? feeding?.gates?.[`gate${id}`];
-            return <div key={id} className="rounded-xl bg-surface p-3"><div className="text-xs text-muted-foreground">Gate {id}</div><div className="mt-1 text-lg font-bold">{feeding?.connected ? gate?.status || "Unknown" : "Unavailable"}</div></div>;
-          })}
-        </div>
-        <p className="mt-3 text-xs text-muted-foreground">Gate status is reported by Arduino and does not independently verify mechanical movement. Servo-timed quantities are estimates, not measured dispensing accuracy.</p>
-      </Card>
-      <Card>
-        <CardTitle>PCA9685 servo compartments</CardTitle>
-        <p className="mt-2 text-sm text-muted-foreground">Physical channel assignment. Channel states appear only when the Raspberry Pi reports individual servo telemetry; these are not inferred from the three legacy feeding gates.</p>
-        <div className="mt-4 grid gap-4 md:grid-cols-2">
-          {SERVO_COMPARTMENTS.map(compartment => (
-            <div key={compartment.name} className="rounded-xl border p-4">
-              <div className="font-semibold">{compartment.name}</div>
-              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
-                {compartment.channels.map(channel => (
-                  <div key={channel} className="rounded-lg bg-surface p-3">
-                    <div className="text-xs text-muted-foreground">Channel {channel}</div>
-                    <div className="mt-1 text-sm font-semibold">{servoReading(servos, channel)}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-        <p className="mt-3 text-xs text-amber-600">Servo control and actual channel feedback require matching Arduino firmware and Raspberry Pi API support. This page does not send servo commands.</p>
-      </Card>
-      <Card>
-        <CardTitle>Feeding history and accuracy</CardTitle>
-        <p className="text-sm text-muted-foreground">No sample history or fabricated accuracy percentages are displayed. Verified historical feed measurements can be shown after the corresponding persistent API fields are confirmed.</p>
-      </Card>
-    </div>
-  );
+ return <main className="space-y-4"><LiveCompartmentManager /></main>;
 }
