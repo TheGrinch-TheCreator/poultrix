@@ -4,6 +4,7 @@ import { Activity, Camera, Cpu, Droplets, Fan, Flame, Lightbulb, ScanEye, Sun, T
 import { Card, CardTitle, Pill } from "@/components/poultrix/ui";
 import { API_URL, useAI, useHardware, display, stageName } from "@/lib/live-hardware";
 import { formatWeight, readingStatus, formatReadingTime, type WeightPayload } from "@/lib/live-weights";
+import { SERVO_COMPARTMENTS } from "@/lib/servo-compartments";
 
 export const Route = createFileRoute("/")({
   head: () => ({ meta: [{ title: "Dashboard — POULTRIX" }, { name: "description", content: "Live Poultrix hardware monitoring" }] }),
@@ -124,9 +125,10 @@ function Dashboard() {
               <p className="mt-2 text-xs text-muted-foreground">{feedingError ? `Feeding API: ${feedingError}` : "Dispensed amounts based on servo timing are estimates, not verified scale measurements."}</p>
             </div>
           </div>
-          <div className="mt-4 grid gap-2 sm:grid-cols-3">
-            {["1", "2", "3"].map(id => <Stat key={id} label={`Gate ${id}`} value={feeding?.connected ? feeding.gates?.[id]?.status || "Unknown" : "Unavailable"} />)}
+          <div className="mt-4 grid gap-2 sm:grid-cols-2">
+            {SERVO_COMPARTMENTS.map(group => <Stat key={group.name} label={group.name} value={`PCA9685: ${group.channels.join(", ")}`} />)}
           </div>
+          <p className="mt-2 text-xs text-muted-foreground">See Feeding for individual servo channels. Legacy gate states are not mapped to the new compartments.</p>
         </Card>
         <Card>
           <CardTitle icon={<Cpu className="h-4 w-4" />} right={<Link to="/environment" className="text-xs font-semibold text-primary">Environment →</Link>}>Devices</CardTitle>

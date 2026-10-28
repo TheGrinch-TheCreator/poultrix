@@ -4,6 +4,7 @@ import { Wheat, RefreshCw } from "lucide-react";
 import { Card, CardTitle, PageHeader, Pill } from "@/components/poultrix/ui";
 import { API_URL, useHardware } from "@/lib/live-hardware";
 import { formatWeight, readingStatus, formatReadingTime, type WeightPayload } from "@/lib/live-weights";
+import { SERVO_COMPARTMENTS, servoReading, type ServoTelemetry } from "@/lib/servo-compartments";
 
 export const Route = createFileRoute("/feeding")({
   head: () => ({ meta: [{ title: "Feeding — POULTRIX" }, { name: "description", content: "Live Arduino feed weight and dispensing status." }] }),
@@ -42,6 +43,7 @@ function FeedingPage() {
   const { data: hw, error: hardwareError } = useHardware();
   const { data: weight, error: weightError } = useLiveEndpoint<WeightPayload>("/api/feeding/weight");
   const { data: feeding, error: feedingError } = useLiveEndpoint<FeedingStatus>("/api/feeding/status");
+  const { data: servos } = useLiveEndpoint<ServoTelemetry>("/api/servos/status");
   const gates = Object.entries(feeding?.gates ?? {});
   const dispensing = gates.some(([, gate]) => gate.status?.toUpperCase() === "DISPENSING");
   const connected = hw?.connected === true && !hardwareError;
@@ -75,6 +77,26 @@ function FeedingPage() {
           })}
         </div>
         <p className="mt-3 text-xs text-muted-foreground">Gate status is reported by Arduino and does not independently verify mechanical movement. Servo-timed quantities are estimates, not measured dispensing accuracy.</p>
+      </Card>
+      <Card>
+        <CardTitle>PCA9685 servo compartments</CardTitle>
+        <p className="mt-2 text-sm text-muted-foreground">Physical channel assignment. Channel states appear only when the Raspberry Pi reports individual servo telemetry; these are not inferred from the three legacy feeding gates.</p>
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          {SERVO_COMPARTMENTS.map(compartment => (
+            <div key={compartment.name} className="rounded-xl border p-4">
+              <div className="font-semibold">{compartment.name}</div>
+              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {compartment.channels.map(channel => (
+                  <div key={channel} className="rounded-lg bg-surface p-3">
+                    <div className="text-xs text-muted-foreground">Channel {channel}</div>
+                    <div className="mt-1 text-sm font-semibold">{servoReading(servos, channel)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+        <p className="mt-3 text-xs text-amber-600">Servo control and actual channel feedback require matching Arduino firmware and Raspberry Pi API support. This page does not send servo commands.</p>
       </Card>
       <Card>
         <CardTitle>Feeding history and accuracy</CardTitle>
