@@ -109,8 +109,8 @@ function HardwarePage() {
       { name: "Lighting tube", detail: "Arduino-reported relay command; not physical feedback", condition: actuator(online ? hw?.led : undefined) },
     ] },
     { title: "Feeding hardware", components: [
-      { name: "Hopper weight / HX711", detail: weightError ? `Weight endpoint: ${weightError}` : `Arduino-reported: ${formatWeight(weight?.hopperWeight)}`, condition: weightError ? "unknown" : grams(weight?.hopperWeight) !== null ? "active" : "unknown" },
-      { name: "Trough weight / HX711", detail: weightError ? `Weight endpoint: ${weightError}` : `Arduino-reported: ${formatWeight(weight?.troughWeight)}`, condition: weightError ? "unknown" : grams(weight?.troughWeight) !== null ? "active" : "unknown" },
+      { name: "Hopper weight / HX711", detail: weightError ? `Weight endpoint: ${weightError}` : `Arduino-reported: ${formatWeight(weight?.hopper)}`, condition: weightError ? "unknown" : grams(weight?.hopper) !== null ? "active" : "unknown" },
+      { name: "Trough weight / HX711", detail: weightError ? `Weight endpoint: ${weightError}` : `Arduino-reported: ${formatWeight(weight?.trough)}`, condition: weightError ? "unknown" : grams(weight?.trough) !== null ? "active" : "unknown" },
       ...[1, 2, 3].map((gate): Component => {
         const item = gates.find(([key]) => key === String(gate) || key === `gate${gate}`)?.[1];
         const status = item?.status?.toUpperCase();

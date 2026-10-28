@@ -54,7 +54,7 @@ function FeedingPage() {
         <p className="mt-2 flex items-center gap-2 text-xs text-muted-foreground"><RefreshCw className="h-3.5 w-3.5" /> Updates every 3 seconds.</p>
       </Card>
       <div className="grid gap-5 md:grid-cols-2">
-        {([ ["Hopper", weight?.hopperWeight], ["Trough", weight?.troughWeight] ] as const).map(([name, reading]) => (
+        {([ ["Hopper", weight?.hopper], ["Trough", weight?.trough] ] as const).map(([name, reading]) => (
           <Card key={name}>
             <CardTitle>{name} weight</CardTitle>
             <div className="num mt-2 text-4xl font-extrabold">{formatWeight(reading)}</div>
@@ -63,7 +63,7 @@ function FeedingPage() {
           </Card>
         ))}
       </div>
-      {!weightError && weight && !weight.hopperWeight && !weight.troughWeight && <Card><p className="text-sm text-amber-600">Separate hopper/trough readings are not present in the API response. Check Raspberry Pi serial parsing; no combined weight is presented as a compartment measurement.</p></Card>}
+      {!weightError && weight && !weight.hopper && !weight.trough && <Card><p className="text-sm text-amber-600">Separate hopper/trough readings are not present in the API response. Check Raspberry Pi serial parsing; no combined weight is presented as a compartment measurement.</p></Card>}
       <Card>
         <CardTitle>Dispensing status</CardTitle>
         <div className="mt-2 text-2xl font-bold">{feedingError || !feeding?.connected ? "Unavailable" : dispensing ? "Dispensing" : feeding.pending ? "Starting" : gates.length ? "Not dispensing" : "Waiting for status"}</div>

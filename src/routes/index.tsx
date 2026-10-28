@@ -61,8 +61,8 @@ function Dashboard() {
   const healthReady = health?.status === "READY" && connected;
   const gates = Object.entries(feeding?.gates ?? {});
   const activeGates = gates.filter(([, gate]) => gate.status === "DISPENSING");
-  const hopper = weight?.hopperWeight;
-  const trough = weight?.troughWeight;
+  const hopper = weight?.hopper;
+  const trough = weight?.trough;
 
   return (
     <div className="space-y-5">

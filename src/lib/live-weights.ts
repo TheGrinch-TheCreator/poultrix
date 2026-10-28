@@ -8,8 +8,8 @@ export type WeightReading = {
   updatedAt?: string | null;
 };
 export type WeightPayload = WeightReading & {
-  hopperWeight?: WeightReading | null;
-  troughWeight?: WeightReading | null;
+  hopper?: WeightReading | null;
+  trough?: WeightReading | null;
 };
 
 export function grams(reading?: WeightReading | null): number | null {
