@@ -10,7 +10,7 @@ const SESSION_KEY = "poultrix_maintenance_token";
 const names = ["Fan 1", "Fan 2", "Fan 3", "Fan 4", "LED", "Heater Lamps (2 × D28/IN7)"];
 function BypassPage() {
   const [password, setPassword] = useState("");
-  const [token, setToken] = useState(() => { try { return sessionStorage.getItem(SESSION_KEY) || ""; } catch { return ""; } });
+  const [token, setToken] = useState(() => { try { return localStorage.getItem(SESSION_KEY) || ""; } catch { return ""; } });
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("Maintenance controls are inactive.");
   const [seconds, setSeconds] = useState("2");
@@ -29,7 +29,7 @@ function BypassPage() {
     if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
     return result;
   }
-  function clearSession() { setToken(""); try { sessionStorage.removeItem(SESSION_KEY); } catch {} }
+  function clearSession() { setToken(""); try { localStorage.removeItem(SESSION_KEY); } catch {} }
   async function perform(path: string, data?:unknown): Promise<boolean> {
     setBusy(true);
     try {
@@ -64,12 +64,12 @@ function BypassPage() {
         setRelayState(Object.fromEntries(result.relays.map((v:boolean,i:number)=>[i+1,Boolean(v)])));
         setRelayReady(true);
       }
-    }).catch(()=>{clearSession();setRelayReady(false);setMessage("Maintenance session expired; controls locked.");});
+    }).catch(()=>{clearSession();setRelayReady(false);setMessage("Maintenance session expired or hardware disconnected; controls locked.");});
     refresh();
     const id=window.setInterval(refresh,4000);
     return ()=>window.clearInterval(id);
   },[token]);
-  async function login(){setBusy(true);try{const r=await call("login",{password},"");setToken(r.token);try { sessionStorage.setItem(SESSION_KEY,r.token); } catch {} setPassword("");setMessage("Maintenance active. Auto-expires after five minutes without commands.");}catch(e){setMessage(e instanceof Error?e.message:String(e));}finally{setBusy(false);}}
+  async function login(){setBusy(true);try{const r=await call("login",{password},"");setToken(r.token);try { localStorage.setItem(SESSION_KEY,r.token); } catch {} setPassword("");setMessage("Maintenance active. Session validated by Raspberry Pi; safety timeout remains active.");}catch(e){setMessage(e instanceof Error?e.message:String(e));}finally{setBusy(false);}}
   return <>
     <PageHeader title="Maintenance" subtitle="Manual bypass • Authorized use only" />
     <p className="mb-4 text-xs text-muted-foreground">Hidden from navigation. This page does not replace authentication or physical emergency controls.</p>

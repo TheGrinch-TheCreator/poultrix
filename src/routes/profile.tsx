@@ -83,6 +83,7 @@ function ProfilePage() {
   }
 
   async function signOut() {
+    try { const token = localStorage.getItem("poultrix_maintenance_token"); if (token) { await fetch((import.meta.env.VITE_POULTRIX_API_URL || "http://192.168.1.48:5000").replace(/\/$/, "") + "/api/bypass/exit", { method: "POST", headers: { "X-Poultrix-Maintenance": token } }); } } catch {} finally { localStorage.removeItem("poultrix_maintenance_token"); }
     await supabase.auth.signOut();
     nav({ to: "/login", replace: true });
   }
