@@ -1,0 +1,218 @@
+# POULTRIX: Philippine Temperature and Lighting Standards
+## Based on: Philippines Recommends for Broiler Production (4th Edition)
+### Source: Philippine Council for Agriculture, Forestry and Natural Resources Research and Development (PCARRD), Department of Science and Technology (DOST), Philippines
+
+---
+
+## Source Reference
+
+> Philippine Council for Agriculture, Forestry and Natural Resources Research and Development (PCARRD). (2004). *Philippines Recommends for Broiler Production* (4th ed.). Department of Science and Technology, Philippines.
+
+---
+
+## 0. Growth Stage Day Count (PCARRD Standard)
+
+The *Philippines Recommends for Broiler Production* defines three feed/growth stages for broilers. POULTRIX maps its YOLOv8s-cls classification directly to these three stages:
+
+| POULTRIX Stage | PCARRD Stage Name | Age Range | Duration |
+|---|---|---|---|
+| **Starter** | Prestarter / Chick Booster | Day 1–10 (0–2 weeks) | 10 days |
+| **Grower** | Broiler Starter | Day 11–24 (2–4 weeks) | 14 days |
+| **Finisher** | Broiler Finisher | Day 25–42 (4–6 weeks / market age) | 18 days |
+| **Total cycle** | | **Day 1–42** | **42 days** |
+
+> **Important:** The full broiler cycle in the Philippine standard runs to **42 days** (6 weeks) — longer than the 35-day international standard. Market weight is achieved at 36–42 days per the document: *"Broilers should be marketed as soon as they reach the marketable age (36–42 days old) and weight (1.6–2.0 kg liveweight)."*
+
+---
+
+## 1. Temperature Standards
+
+### 1.1 Brooding Period — Direct Quote from Document
+
+> *"Brooding is the process of providing supplemental heat to keep the brooder temperature at 31.1–33.3°C for 24 hours from hatching up to the time that the chicks have grown sufficient feathers to control their own body temperature. During the brooding period, optimum heat should be provided to the chicks to prevent them from chilling, which may predispose them to disease and eventually, death. In the Philippines, this period takes about 2–3 weeks, depending on the season."*
+
+### 1.2 Temperature Table by Age (Directly from Document)
+
+| Age of Chicks (days) | Temperature (°C) | POULTRIX Stage |
+|---|---|---|
+| **1–7** | **32.2–35.0°C** | Starter (Prestarter/Chick Booster) |
+| **8–14** | **29.4–32.2°C** | Starter → Grower transition week |
+| **14–21** | **26.7–29.4°C** | Grower (Broiler Starter) |
+| **Beyond 21 days** | **Provide heat only when necessary** | Grower (late) → Finisher |
+
+### 1.3 Mapped to POULTRIX Growth Stages (Updated Day Counts)
+
+| POULTRIX Stage | PCARRD Name | Age Range | Target Temperature (°C) | Notes |
+|---|---|---|---|---|
+| **Starter** | Prestarter / Chick Booster | Day 1–10 | 32.2–35.0°C (Week 1) → 29.4–32.2°C (Week 2 begins) | First week critical — 32.2–35.0°C; brooder heater ON continuously at night |
+| **Grower** | Broiler Starter | Day 11–24 | 29.4–32.2°C (Day 11–14) → 26.7–29.4°C (Day 15–21) → Heat only when needed (Day 22–24) | Temperature reduces 3°C/week; by Day 22 heat is supplemental only |
+| **Finisher** | Broiler Finisher | Day 25–42 | Provide heat only when necessary; prioritize cooling | Ambient Philippine temp (27–35°C) typically meets or exceeds minimum; primary concern is heat stress; fans are main control |
+
+### 1.4 Temperature Reduction Rule (Directly from Document)
+
+> *"Brooder temperature can be reduced by 3°C/week until the chicks are 3 weeks old. During warm months, the brooder heater may be provided intermittently during daytime, but it should be provided continuously at night."*
+
+Week-by-week breakdown:
+
+| Week | Days | Temperature Target | POULTRIX Stage |
+|---|---|---|---|
+| Week 1 | Day 1–7 | 32.2–35.0°C | Starter |
+| Week 2 | Day 8–14 | 29.4–32.2°C (−3°C) | Starter → Grower |
+| Week 3 | Day 15–21 | 26.7–29.4°C (−3°C) | Grower |
+| Week 4 | Day 22–28 | Heat only when necessary | Grower (late) → Finisher |
+| Week 5 | Day 29–35 | Cooling priority | Finisher |
+| Week 6 | Day 36–42 | Cooling priority — harvest period | Finisher |
+
+### 1.5 Behavioral Indicators of Correct Temperature
+
+The document recommends using **chick behavior** as a practical temperature guide:
+
+| Chick Behavior | Meaning | Action |
+|---|---|---|
+| Evenly distributed, active (feeding, drinking, sleeping, playing) | ✅ Temperature is adequate | Maintain current setting |
+| Huddling near heat source, unusual chirping | ❌ Temperature too LOW | Increase heat |
+| Piling on top of each other | ❌ Temperature critically LOW — mortality risk | Immediately increase heat |
+| Moving away from heat, spreading wings, panting, drinking excessively | ❌ Temperature too HIGH | Reduce heat |
+| Forming wedge-like pattern | Draft present inside brooder | Eliminate draft |
+
+### 1.6 Philippine Climate Context
+
+From the document:
+> *"Like in any other tropical country, summer heat in the Philippines, which lasts for 4–6 months each year (usually June to September), is accompanied by very high relative humidity. This climatic condition has been observed to cause significant reduction in the survival rate and overall growth performance of broiler chickens."*
+
+> *"The primary concern for broiler housing design in the Philippines is to provide optimum ventilation and the lowest in-house temperature possible."*
+
+**Implication for POULTRIX:**
+- Heat lamps are primarily needed during **Starter stage only (Day 1–10)** and early Grower (Day 11–14)
+- From Day 25 onward (Finisher stage), the system's **primary environmental task is COOLING via fans**
+- The 42-day Philippine cycle means the Finisher stage lasts 18 days — the longest stage — during which heat stress management is the dominant concern
+
+---
+
+## 2. Lighting Standards
+
+### 2.1 What the Document States (Directly)
+
+**During Brooding — Starter Stage (Day 1–10):**
+
+> *"Adequate lighting facilities have to be provided within the brooder compartment. Proper lighting in brooder pens encourages the chicks to keep close to the sources of heat and help them locate the feed and water. If the source of heat is an incandescent bulb, then lighting of the brooder pen is accomplished at the same time. However, if other sources of heat are used, light from a 5- to 10-watt bulb would be needed to enable the broiler chicks to locate the feed and water. If natural light is sufficient during daytime, artificial light may only be provided at night."*
+
+**During Grower and Finisher Stages:**
+
+> *"Birds must be provided with artificial light to enable them to eat at night."*
+
+### 2.2 Lighting Requirements Mapped to POULTRIX Stages (Updated)
+
+| POULTRIX Stage | PCARRD Name | Age Range | Lighting Requirement | Light Source | Notes |
+|---|---|---|---|---|---|
+| **Starter** | Prestarter / Chick Booster | Day 1–10 | Continuous (day + night) | 5–10W bulb or LED | Natural light during day; artificial light all night. POULTRIX uses ceramic heat lamp (not incandescent), so LED lights serve as the light source per document guidance |
+| **Grower** | Broiler Starter | Day 11–24 | Artificial light at night | LED light bulb | Natural daylight (~12 hrs in PH); artificial light at night so birds can eat and drink |
+| **Finisher** | Broiler Finisher | Day 25–42 | Artificial light at night | LED light bulb | Continuous night lighting encourages feed intake and maximizes weight gain before harvest at Day 36–42 |
+
+### 2.3 Key Lighting Principle from the Document
+
+The Philippine standard's lighting objectives are:
+1. **Enable chicks to find feed and water** — especially at night
+2. **Encourage chicks to stay near the heat source** during brooding (Starter stage)
+3. **Allow continuous feeding access** — birds must be able to eat and drink at all hours throughout the full 42-day cycle
+
+> **Note:** The document does NOT specify precise light hours (e.g., "23 hours on, 1 hour off"). It specifies that natural daylight is used during the day and artificial light supplements at night so birds can feed.
+
+### 2.4 Practical Light Schedule for POULTRIX (Philippine Standard)
+
+Based on the document's principles combined with Philippine natural daylight (~12 hours, 6AM–6PM):
+
+| Stage | Days | Natural Light (Day) | Artificial Light (Night) | Total Light | LED Lights Status |
+|---|---|---|---|---|---|
+| **Starter** | Day 1–10 | ~12 hrs natural light | ON all night continuously | ~23–24 hrs | ON 24 hours |
+| **Grower** | Day 11–24 | ~12 hrs natural light | ON at night to allow feeding | ~20–23 hrs | ON during dark hours |
+| **Finisher** | Day 25–42 | ~12 hrs natural light | ON at night; maximize in final days (Day 36–42) to boost feed intake before harvest | ~20–23 hrs | ON during dark hours |
+
+> **Night defined as:** Approximately 6PM–6AM in the Philippines (12-hour dark period naturally). Artificial light bridges this gap throughout all three stages.
+
+### 2.5 Light Intensity
+
+The document specifies:
+- **5–10 watt bulb** sufficient for brooding stage (to help chicks locate feed and water)
+- No specific lux value stated in this document — intensity only needs to be sufficient for birds to see feed and water
+
+For POULTRIX's LED light bulbs (2 units, 220V AC, daylight color), this specification is comfortably met throughout all stages.
+
+---
+
+## 3. Summary Table for POULTRIX System Configuration (Updated)
+
+| Parameter | Starter — Day 1–10 | Grower — Day 11–24 | Finisher — Day 25–42 |
+|---|---|---|---|
+| **PCARRD Name** | Prestarter / Chick Booster | Broiler Starter | Broiler Finisher |
+| **Temperature Target** | 32.2–35.0°C (Day 1–7) → 29.4–32.2°C (Day 8–10) | 29.4–32.2°C (Day 11–14) → 26.7–29.4°C (Day 15–21) → Heat when needed (Day 22–24) | Heat only when necessary — cooling is primary concern |
+| **Heat Lamp (CH7–CH8)** | ON — primary heat source | ON only if temp drops below target | Standby — ON only if temp drops unusually |
+| **Exhaust Fan (CH1–CH4)** | OFF unless overheating | ON if temp exceeds upper limit | PRIMARY CONTROL — ON when temp too high |
+| **LED Lights (CH5–CH6)** | ON 24 hours (day and night) | ON during dark hours (~6PM–6AM) | ON during dark hours; maximize in Day 36–42 |
+| **Temperature Reduction** | −3°C per week | Continues −3°C/week; heat supplemental by Day 22 | No heating needed — fans dominate |
+| **Primary Concern** | Keeping chicks warm, especially at night | Balanced ventilation and temperature | Heat stress prevention — cooling, ventilation |
+| **Market Target** | — | — | 1.6–2.0 kg liveweight at Day 36–42 |
+
+---
+
+## 4. Feed Stage Reference (PCARRD Standard)
+
+From the document's feed types section, which aligns with the POULTRIX stage day counts:
+
+| PCARRD Feed Name | POULTRIX Stage | Days | Description |
+|---|---|---|---|
+| Prestarter / Chick Booster | Starter | Day 1–10 (0–2 weeks) | Given to chicks from day-old to 2 weeks |
+| Broiler Starter | Grower | Day 11–24 (2–4 weeks) | Given to chicks from 2 weeks old to 4 weeks old |
+| Broiler Finisher | Finisher | Day 25–42 (4–6 weeks) | Given to chicks from 4 weeks old until desired market weight and age |
+
+> **Source:** *"The three types of feeds commonly offered to broiler chickens are the following: (a) Prestarter or chick booster — given to chicks from day-old to 2 weeks. (b) Broiler starter — given to chicks from 2 weeks old to 4 weeks old. (c) Broiler finisher — given to chicks from 4 weeks old until desired market weight and age are achieved."* — Philippines Recommends for Broiler Production, 4th ed., p. 25
+
+---
+
+## 5. Feed Quantities for 10 Birds (Updated to 42-Day Cycle)
+
+| Stage | Days | Feed/Bird/Day | Total for 10 Birds | Sessions/Day |
+|---|---|---|---|---|
+| Starter | Day 1–3 | 13–15g | 130–150g | 6 |
+| Starter | Day 4–7 | 20–25g | 200–250g | 6 |
+| Starter | Day 8–10 | 30–35g | 300–350g | 6 |
+| Grower | Day 11–14 | 50–60g | 500–600g | 4 |
+| Grower | Day 15–21 | 80–100g | 800–1,000g | 4 |
+| Grower | Day 22–24 | 100–110g | 1,000–1,100g | 4 |
+| Finisher | Day 25–35 | 120–150g | 1,200–1,500g | 4 |
+| Finisher | Day 36–42 | 150–170g | 1,500–1,700g | 4 |
+
+**Total estimated feed for full 42-day cycle (10 birds): ~38–42 kg**
+
+---
+
+## 6. Legal and Scientific Basis
+
+| Standard | Source |
+|---|---|
+| Stage day counts (Prestarter Day 1–10, Starter Day 11–24, Finisher Day 25–42) | *Philippines Recommends for Broiler Production*, 4th ed., PCARRD-DOST, 2004, p. 25 |
+| Market age (36–42 days, 1.6–2.0 kg liveweight) | *Philippines Recommends for Broiler Production*, 4th ed., PCARRD-DOST, 2004, p. 8 |
+| Temperature table (32.2–35.0°C, 29.4–32.2°C, 26.7–29.4°C) | *Philippines Recommends for Broiler Production*, 4th ed., PCARRD-DOST, 2004, p. 16 |
+| 3°C/week temperature reduction rule | *Philippines Recommends for Broiler Production*, 4th ed., PCARRD-DOST, 2004, p. 21 |
+| Brooding temperature (31.1–33.3°C for first 24 hours) | *Philippines Recommends for Broiler Production*, 4th ed., PCARRD-DOST, 2004, p. 15 |
+| 5–10 watt bulb for brooding lighting | *Philippines Recommends for Broiler Production*, 4th ed., PCARRD-DOST, 2004, p. 18 |
+| Artificial light at night for feeding access | *Philippines Recommends for Broiler Production*, 4th ed., PCARRD-DOST, 2004, p. 33 |
+| Philippine climate context (heat stress, ventilation priority) | *Philippines Recommends for Broiler Production*, 4th ed., PCARRD-DOST, 2004, pp. 13–14 |
+
+---
+
+## 7. Key Differences from Previous POULTRIX Documentation
+
+| Parameter | Previous (International 35-day) | Updated (PCARRD Philippine 42-day) |
+|---|---|---|
+| Starter stage days | Day 1–10 | Day 1–10 ✅ Same |
+| Grower stage days | Day 11–21 | Day 11–24 ⬆️ Extended by 3 days |
+| Finisher stage days | Day 22–35 | Day 25–42 ⬆️ Extended by 10 days |
+| Total cycle | 35 days | **42 days** |
+| Market age | 35 days | 36–42 days |
+| Market weight | ~1.5 kg | 1.6–2.0 kg liveweight |
+| Total feed (10 birds) | ~28.2 kg | ~38–42 kg |
+
+---
+
+*This document is based exclusively on the Philippines Recommends for Broiler Production (4th Edition, 2004), published by PCARRD-DOST, and reflects the official Philippine standard applicable to the POULTRIX system deployed in Laylay, Marinduque, Philippines. All stage day counts, temperature targets, and lighting guidelines in the POULTRIX system should follow this document as the primary legal and scientific basis.*

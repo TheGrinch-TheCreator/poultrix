@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Activity, AlertTriangle, CheckCircle2, CircleOff, HelpCircle, RefreshCw } from "lucide-react";
 import { API_URL, useAI, useHardware } from "@/lib/live-hardware";
+import { grams, formatWeight, type WeightPayload } from "@/lib/live-weights";
 import { Card, CardTitle, PageHeader, Pill } from "@/components/poultrix/ui";
 
 export const Route = createFileRoute("/hardware")({
@@ -19,7 +20,7 @@ type Health = {
   dht22?: string | null;
   lastChecked?: string;
 };
-type Weight = { connected?: boolean; status?: string; weightGrams?: number | null; updatedAt?: string | null };
+
 type Gate = { status?: string };
 type Feeding = { connected?: boolean; gates?: Record<string, Gate>; pending?: unknown };
 type Condition = "active" | "inactive" | "problem" | "unknown";
@@ -74,7 +75,7 @@ function HardwarePage() {
   const { data: hw, error: hardwareError } = useHardware();
   const { data: ai, error: aiError } = useAI();
   const { data: health, error: healthError } = useLiveEndpoint<Health>("/api/system/health");
-  const { data: weight, error: weightError } = useLiveEndpoint<Weight>("/api/feeding/weight");
+  const { data: weight, error: weightError } = useLiveEndpoint<WeightPayload>("/api/feeding/weight");
   const { data: feeding, error: feedingError } = useLiveEndpoint<Feeding>("/api/feeding/status");
 
   const online = !!hw?.connected && !hardwareError;
@@ -108,7 +109,8 @@ function HardwarePage() {
       { name: "Lighting tube", detail: "Arduino-reported relay command; not physical feedback", condition: actuator(online ? hw?.led : undefined) },
     ] },
     { title: "Feeding hardware", components: [
-      { name: "Combined feed weight / HX711", detail: weightError ? `Weight endpoint: ${weightError}` : typeof weight?.weightGrams === "number" ? `Estimated combined weight: ${(weight.weightGrams / 1000).toFixed(3)} kg` : `Reading: ${weight?.status ?? "unavailable"}`, condition: weightError ? "unknown" : !weight?.connected ? "unknown" : typeof weight.weightGrams === "number" ? "active" : weight.status === "ERROR" || weight.status === "FAULT" ? "problem" : "unknown" },
+      { name: "Hopper weight / HX711", detail: weightError ? `Weight endpoint: ${weightError}` : `Arduino-reported: ${formatWeight(weight?.hopperWeight)}`, condition: weightError ? "unknown" : grams(weight?.hopperWeight) !== null ? "active" : "unknown" },
+      { name: "Trough weight / HX711", detail: weightError ? `Weight endpoint: ${weightError}` : `Arduino-reported: ${formatWeight(weight?.troughWeight)}`, condition: weightError ? "unknown" : grams(weight?.troughWeight) !== null ? "active" : "unknown" },
       ...[1, 2, 3].map((gate): Component => {
         const item = gates.find(([key]) => key === String(gate) || key === `gate${gate}`)?.[1];
         const status = item?.status?.toUpperCase();

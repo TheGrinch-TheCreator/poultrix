@@ -1,107 +1,85 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { Check } from "lucide-react";
-import { farm, feed, feedHistory, feedingEvents, stageInfo } from "@/lib/demo-data";
-import { Card, CardTitle, DemoTag, Meter, PageHeader, Pill, StageBadge } from "@/components/poultrix/ui";
-import { DeclarationForm, FeedHoldAlert, FeedSchedulePanel, FeedStockPanel, LeftoverNotice, MaeCard } from "@/components/poultrix/v3";
-import { FeedBars } from "@/components/poultrix/charts";
+import { useEffect, useState } from "react";
+import { Wheat, RefreshCw } from "lucide-react";
+import { Card, CardTitle, PageHeader, Pill } from "@/components/poultrix/ui";
+import { API_URL, useHardware } from "@/lib/live-hardware";
+import { formatWeight, readingStatus, formatReadingTime, type WeightPayload } from "@/lib/live-weights";
 
 export const Route = createFileRoute("/feeding")({
-  head: () => ({
-    meta: [
-      { title: "Feeding — POULTRIX" },
-      { name: "description", content: "Stage-based feed dispensing, compartment levels, trough weight and feeding accuracy." },
-      { property: "og:title", content: "Feeding — POULTRIX" },
-      { property: "og:description", content: "Stage-based feed dispensing, compartment levels, trough weight and feeding accuracy." },
-    ],
-  }),
+  head: () => ({ meta: [{ title: "Feeding — POULTRIX" }, { name: "description", content: "Live Arduino feed weight and dispensing status." }] }),
   component: FeedingPage,
 });
 
-const STEPS = ["Growth stage", "Feed type", "Target amount", "Gates open", "Weighing", "Target reached", "Complete"];
+type Gate = { status?: string; durationMs?: number; estimatedGrams?: number | null; updatedAt?: string | null };
+type FeedingStatus = { connected?: boolean; gates?: Record<string, Gate>; pending?: { gate?: number; durationMs?: number } | null; events?: unknown[] };
 
-function FeedingPage() {
-  const st = stageInfo(farm.stage);
-  return (
-    <>
-      <PageHeader title="Feeding" subtitle="POULTRIX picks the feed and amount from the AI growth stage." right={<DemoTag />} />
-      <div className="mb-5 space-y-3"><FeedHoldAlert /><LeftoverNotice /></div>
-      <div className="mb-5 grid gap-5 lg:grid-cols-3">
-        <FeedSchedulePanel />
-        <FeedStockPanel />
-        <MaeCard />
-      </div>
-      <div className="mb-5"><DeclarationForm /></div>
-      <div className="grid gap-5 lg:grid-cols-3">
-        <Card>
-          <CardTitle>Last feeding session</CardTitle>
-          <div className="num text-5xl font-extrabold">{feed.dispensed}g</div>
-          <p className="text-muted-foreground">of {feed.targetPerFeeding}g target · {feed.accuracy}% accurate</p>
-          <div className="mt-3"><Meter value={(feed.dispensed / feed.targetPerFeeding) * 100} /></div>
-          <dl className="mt-5 space-y-2 text-sm">
-            <Row k="Recommended feed" v={st.feed} />
-            <Row k="Daily guide" v={st.feedRange} />
-            <Row k="Feed in trough now" v={`${feed.trough} g`} />
-            <Row k="Status" v={feed.status} />
-            <Row k="Next feeding" v={feed.nextFeeding} />
-          </dl>
-        </Card>
-
-        <Card className="lg:col-span-2">
-          <CardTitle>How the last feeding went</CardTitle>
-          <ol className="grid gap-2 sm:grid-cols-7">
-            {STEPS.map((s, i) => (
-              <li key={s} className="flex items-center gap-2 sm:flex-col sm:text-center">
-                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-ok text-primary-foreground"><Check className="h-4 w-4" /></span>
-                <span className="text-xs font-medium">{i + 1}. {s}</span>
-              </li>
-            ))}
-          </ol>
-          <div className="mt-6 hidden gap-3 sm:grid-cols-2">
-            {feed.compartments.map((c) => {
-              const pct = (c.kg / c.capacity) * 100;
-              const tone = pct < 25 ? "danger" : pct < 50 ? "warn" : "ok";
-              return (
-                <div key={c.id} className="rounded-xl border bg-surface p-4">
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold">Compartment {c.id}</span>
-                    <Pill tone={tone}>{tone === "ok" ? "Good" : tone === "warn" ? "Getting low" : "Refill now"}</Pill>
-                  </div>
-                  <div className="mt-1 text-sm text-muted-foreground">{c.contents}</div>
-                  <div className="num mt-2 text-3xl font-bold">{c.kg} kg <span className="text-sm text-muted-foreground">/ {c.capacity} kg</span></div>
-                  <div className="mt-2"><Meter value={pct} tone={tone} /></div>
-                  <p className="mt-2 text-xs text-muted-foreground">{c.note}</p>
-                </div>
-              );
-            })}
-          </div>
-        </Card>
-      </div>
-
-      <Card className="mt-5">
-        <CardTitle>Daily feed: target vs dispensed (whole flock)</CardTitle>
-        <FeedBars data={feedHistory} />
-      </Card>
-
-      <Card className="mt-5 overflow-x-auto">
-        <CardTitle>Recent feedings</CardTitle>
-        <table className="w-full min-w-[680px] text-sm">
-          <thead className="text-left text-xs uppercase tracking-wider text-muted-foreground">
-            <tr><th className="pb-2">Time</th><th>Stage</th><th>Compartments</th><th>Target</th><th>Dispensed</th><th>MAE</th><th>Leftover / reduced</th></tr>
-          </thead>
-          <tbody>
-            {feedingEvents.map((e) => (
-              <tr key={e.time} className="border-t">
-                <td className="py-3">{e.time}</td><td><StageBadge stage={e.stage} /></td><td>{e.comps}</td><td>{e.target}g</td><td className="font-semibold">{e.actual}g</td>
-                <td>±{Math.abs(e.actual - e.target)}g</td><td><Pill tone={e.leftover === "No" ? "neutral" : "info"}>{e.leftover}</Pill></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Card>
-    </>
-  );
+function useLiveEndpoint<T>(path: string) {
+  const [data, setData] = useState<T | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    let busy = false;
+    const load = async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const response = await fetch(`${API_URL}${path}`, { cache: "no-store" });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const value = await response.json() as T;
+        if (active) { setData(value); setError(null); }
+      } catch (cause) {
+        if (active) { setData(null); setError(cause instanceof Error ? cause.message : "Connection unavailable"); }
+      } finally { busy = false; }
+    };
+    void load();
+    const interval = setInterval(() => void load(), 3000);
+    return () => { active = false; clearInterval(interval); };
+  }, [path]);
+  return { data, error };
 }
 
-function Row({ k, v }: { k: string; v: string }) {
-  return <div className="flex justify-between gap-3 border-b pb-2 last:border-0"><dt className="text-muted-foreground">{k}</dt><dd className="text-right font-medium">{v}</dd></div>;
+function FeedingPage() {
+  const { data: hw, error: hardwareError } = useHardware();
+  const { data: weight, error: weightError } = useLiveEndpoint<WeightPayload>("/api/feeding/weight");
+  const { data: feeding, error: feedingError } = useLiveEndpoint<FeedingStatus>("/api/feeding/status");
+  const gates = Object.entries(feeding?.gates ?? {});
+  const dispensing = gates.some(([, gate]) => gate.status?.toUpperCase() === "DISPENSING");
+  const connected = hw?.connected === true && !hardwareError;
+  return (
+    <div className="space-y-5">
+      <PageHeader title="Feeding" subtitle="Live Arduino load-cell readings and reported feeding states. No simulated feeding data." />
+      <Card>
+        <CardTitle icon={<Wheat className="h-4 w-4" />} right={<Pill tone={connected ? "ok" : "warn"}>{connected ? "Arduino connected" : "Arduino unavailable"}</Pill>}>Live feeding monitoring</CardTitle>
+        <p className="text-sm text-muted-foreground">Mode: {connected ? hw?.mode?.toUpperCase() || "Unknown" : "Unavailable"}. Weight values come from Arduino calibration; the web app does not recalibrate them.</p>
+        <p className="mt-2 flex items-center gap-2 text-xs text-muted-foreground"><RefreshCw className="h-3.5 w-3.5" /> Updates every 3 seconds.</p>
+      </Card>
+      <div className="grid gap-5 md:grid-cols-2">
+        {([ ["Hopper", weight?.hopperWeight], ["Trough", weight?.troughWeight] ] as const).map(([name, reading]) => (
+          <Card key={name}>
+            <CardTitle>{name} weight</CardTitle>
+            <div className="num mt-2 text-4xl font-extrabold">{formatWeight(reading)}</div>
+            <p className="mt-2 text-sm text-muted-foreground">{weightError ? `Weight API: ${weightError}` : readingStatus(reading)}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{formatReadingTime(reading)}</p>
+          </Card>
+        ))}
+      </div>
+      {!weightError && weight && !weight.hopperWeight && !weight.troughWeight && <Card><p className="text-sm text-amber-600">Separate hopper/trough readings are not present in the API response. Check Raspberry Pi serial parsing; no combined weight is presented as a compartment measurement.</p></Card>}
+      <Card>
+        <CardTitle>Dispensing status</CardTitle>
+        <div className="mt-2 text-2xl font-bold">{feedingError || !feeding?.connected ? "Unavailable" : dispensing ? "Dispensing" : feeding.pending ? "Starting" : gates.length ? "Not dispensing" : "Waiting for status"}</div>
+        {feedingError && <p className="mt-2 text-sm text-destructive">Feeding API: {feedingError}</p>}
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          {["1", "2", "3"].map(id => {
+            const gate = feeding?.gates?.[id] ?? feeding?.gates?.[`gate${id}`];
+            return <div key={id} className="rounded-xl bg-surface p-3"><div className="text-xs text-muted-foreground">Gate {id}</div><div className="mt-1 text-lg font-bold">{feeding?.connected ? gate?.status || "Unknown" : "Unavailable"}</div></div>;
+          })}
+        </div>
+        <p className="mt-3 text-xs text-muted-foreground">Gate status is reported by Arduino and does not independently verify mechanical movement. Servo-timed quantities are estimates, not measured dispensing accuracy.</p>
+      </Card>
+      <Card>
+        <CardTitle>Feeding history and accuracy</CardTitle>
+        <p className="text-sm text-muted-foreground">No sample history or fabricated accuracy percentages are displayed. Verified historical feed measurements can be shown after the corresponding persistent API fields are confirmed.</p>
+      </Card>
+    </div>
+  );
 }

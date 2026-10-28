@@ -24,8 +24,6 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as MoreRouteImport } from './routes/more'
 import { Route as ProfileRouteImport } from './routes/profile'
 import { Route as SettingsRouteImport } from './routes/settings'
-import { Route as NewfolderAlertsRouteImport } from './routes/New folder/alerts'
-import { Route as NewfolderHardwareRouteImport } from './routes/New folder/hardware'
 import { Route as ApiHistoryRouteImport } from './routes/api/history'
 import { Route as ApiAlertsAcknowledgementsRouteImport } from './routes/api/alerts/acknowledgements'
 
@@ -104,16 +102,6 @@ const SettingsRoute = SettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
-const NewfolderAlertsRoute = NewfolderAlertsRouteImport.update({
-  id: '/New folder/alerts',
-  path: '/New folder/alerts',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const NewfolderHardwareRoute = NewfolderHardwareRouteImport.update({
-  id: '/New folder/hardware',
-  path: '/New folder/hardware',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const ApiHistoryRoute = ApiHistoryRouteImport.update({
   id: '/api/history',
   path: '/api/history',
@@ -142,8 +130,6 @@ export interface FileRoutesByFullPath {
   '/more': typeof MoreRoute
   '/profile': typeof ProfileRoute
   '/settings': typeof SettingsRoute
-  '/New folder/alerts': typeof NewfolderAlertsRoute
-  '/New folder/hardware': typeof NewfolderHardwareRoute
   '/api/history': typeof ApiHistoryRoute
   '/api/alerts/acknowledgements': typeof ApiAlertsAcknowledgementsRoute
 }
@@ -163,8 +149,6 @@ export interface FileRoutesByTo {
   '/more': typeof MoreRoute
   '/profile': typeof ProfileRoute
   '/settings': typeof SettingsRoute
-  '/New folder/alerts': typeof NewfolderAlertsRoute
-  '/New folder/hardware': typeof NewfolderHardwareRoute
   '/api/history': typeof ApiHistoryRoute
   '/api/alerts/acknowledgements': typeof ApiAlertsAcknowledgementsRoute
 }
@@ -185,8 +169,6 @@ export interface FileRoutesById {
   '/more': typeof MoreRoute
   '/profile': typeof ProfileRoute
   '/settings': typeof SettingsRoute
-  '/New folder/alerts': typeof NewfolderAlertsRoute
-  '/New folder/hardware': typeof NewfolderHardwareRoute
   '/api/history': typeof ApiHistoryRoute
   '/api/alerts/acknowledgements': typeof ApiAlertsAcknowledgementsRoute
 }
@@ -208,8 +190,6 @@ export interface FileRouteTypes {
     | '/more'
     | '/profile'
     | '/settings'
-    | '/New folder/alerts'
-    | '/New folder/hardware'
     | '/api/history'
     | '/api/alerts/acknowledgements'
   fileRoutesByTo: FileRoutesByTo
@@ -229,8 +209,6 @@ export interface FileRouteTypes {
     | '/more'
     | '/profile'
     | '/settings'
-    | '/New folder/alerts'
-    | '/New folder/hardware'
     | '/api/history'
     | '/api/alerts/acknowledgements'
   id:
@@ -250,8 +228,6 @@ export interface FileRouteTypes {
     | '/more'
     | '/profile'
     | '/settings'
-    | '/New folder/alerts'
-    | '/New folder/hardware'
     | '/api/history'
     | '/api/alerts/acknowledgements'
   fileRoutesById: FileRoutesById
@@ -272,8 +248,6 @@ export interface RootRouteChildren {
   MoreRoute: typeof MoreRoute
   ProfileRoute: typeof ProfileRoute
   SettingsRoute: typeof SettingsRoute
-  NewfolderAlertsRoute: typeof NewfolderAlertsRoute
-  NewfolderHardwareRoute: typeof NewfolderHardwareRoute
   ApiHistoryRoute: typeof ApiHistoryRoute
   ApiAlertsAcknowledgementsRoute: typeof ApiAlertsAcknowledgementsRoute
 }
@@ -385,20 +359,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/New folder/alerts': {
-      id: '/New folder/alerts'
-      path: '/New folder/alerts'
-      fullPath: '/New folder/alerts'
-      preLoaderRoute: typeof NewfolderAlertsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/New folder/hardware': {
-      id: '/New folder/hardware'
-      path: '/New folder/hardware'
-      fullPath: '/New folder/hardware'
-      preLoaderRoute: typeof NewfolderHardwareRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/api/history': {
       id: '/api/history'
       path: '/api/history'
@@ -432,8 +392,6 @@ const rootRouteChildren: RootRouteChildren = {
   MoreRoute: MoreRoute,
   ProfileRoute: ProfileRoute,
   SettingsRoute: SettingsRoute,
-  NewfolderAlertsRoute: NewfolderAlertsRoute,
-  NewfolderHardwareRoute: NewfolderHardwareRoute,
   ApiHistoryRoute: ApiHistoryRoute,
   ApiAlertsAcknowledgementsRoute: ApiAlertsAcknowledgementsRoute,
 }

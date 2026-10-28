@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Activity, Camera, Cpu, Droplets, Fan, Flame, Lightbulb, ScanEye, Sun, Thermometer, Wheat } from "lucide-react";
 import { Card, CardTitle, Pill } from "@/components/poultrix/ui";
 import { API_URL, useAI, useHardware, display, stageName } from "@/lib/live-hardware";
+import { formatWeight, readingStatus, formatReadingTime, type WeightPayload } from "@/lib/live-weights";
 
 export const Route = createFileRoute("/")({
   head: () => ({ meta: [{ title: "Dashboard — POULTRIX" }, { name: "description", content: "Live Poultrix hardware monitoring" }] }),
@@ -10,7 +11,7 @@ export const Route = createFileRoute("/")({
 });
 
 type Health = { status?: string; issues?: string[]; lastChecked?: string; internet?: boolean; camera?: boolean; arduino?: boolean; aiModel?: boolean; dht22?: string | null };
-type Weight = { connected?: boolean; status?: string; estimated?: boolean; weightGrams?: number | null; weightKg?: number | null; updatedAt?: string | null };
+
 type Gate = { status?: string; durationMs?: number; estimatedGrams?: number | null; updatedAt?: string | null };
 type Feeding = { connected?: boolean; gates?: Record<string, Gate>; events?: unknown[]; pending?: { gate?: number; durationMs?: number } | null };
 
@@ -43,7 +44,7 @@ function Dashboard() {
   const { data: hw, error: hardwareError } = useHardware();
   const { data: ai, error: aiError } = useAI();
   const { data: health, error: healthError } = useEndpoint<Health>("/api/system/health");
-  const { data: weight, error: weightError } = useEndpoint<Weight>("/api/feeding/weight");
+  const { data: weight, error: weightError } = useEndpoint<WeightPayload>("/api/feeding/weight");
   const { data: feeding, error: feedingError } = useEndpoint<Feeding>("/api/feeding/status");
 
   const connected = hw?.connected === true && !hardwareError;
@@ -60,7 +61,8 @@ function Dashboard() {
   const healthReady = health?.status === "READY" && connected;
   const gates = Object.entries(feeding?.gates ?? {});
   const activeGates = gates.filter(([, gate]) => gate.status === "DISPENSING");
-  const weightValid = weight?.connected && !weightError && typeof weight.weightGrams === "number" && Number.isFinite(weight.weightGrams);
+  const hopper = weight?.hopperWeight;
+  const trough = weight?.troughWeight;
 
   return (
     <div className="space-y-5">
@@ -105,10 +107,15 @@ function Dashboard() {
           <CardTitle icon={<Wheat className="h-4 w-4" />} right={<Link to="/feeding" className="text-xs font-semibold text-primary">Feeding details →</Link>}>Feed compartments · live monitoring</CardTitle>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="rounded-xl bg-surface p-4">
-              <div className="text-xs uppercase tracking-wider text-muted-foreground">Combined feed remaining · estimated</div>
-              <div className="num mt-2 text-4xl font-extrabold">{weightValid ? `${(weight!.weightGrams! / 1000).toFixed(3)} kg` : "—"}</div>
-              <p className="mt-2 text-xs text-muted-foreground">Four load sensors, one HX711, two compartments. Individual compartment weights are not available.</p>
-              <p className="mt-2 text-xs text-muted-foreground">{weightError ? `Weight API: ${weightError}` : weightValid ? `Last updated: ${formatDate(weight?.updatedAt)}` : "Waiting for load-cell readings"}</p>
+              <div className="text-xs uppercase tracking-wider text-muted-foreground">Hopper · calibrated load cell</div>
+              <div className="num mt-2 text-4xl font-extrabold">{formatWeight(hopper)}</div>
+              <p className="mt-2 text-xs text-muted-foreground">{weightError ? `Weight API: ${weightError}` : readingStatus(hopper)}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{formatReadingTime(hopper)}</p>
+              <div className="mt-4 text-xs uppercase tracking-wider text-muted-foreground">Trough · calibrated load cell</div>
+              <div className="num mt-2 text-4xl font-extrabold">{formatWeight(trough)}</div>
+              <p className="mt-2 text-xs text-muted-foreground">{weightError ? `Weight API: ${weightError}` : readingStatus(trough)}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{formatReadingTime(trough)}</p>
+              {!hopper && !trough && <p className="mt-2 text-xs text-amber-600">The API has not supplied separate hopper and trough fields. Verify the Raspberry Pi parser before displaying weights.</p>}
             </div>
             <div className="rounded-xl border p-4">
               <div className="text-xs uppercase tracking-wider text-muted-foreground">Dispensing status</div>
