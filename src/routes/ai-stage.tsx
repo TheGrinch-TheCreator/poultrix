@@ -14,7 +14,7 @@ function AIPage(){const {data:ai,error,busy,classify}=useAI();const {data:hw}=us
 </Card>
 <Card className="mt-5">
   <CardTitle>30-second vote result</CardTitle>
-  <p className="mb-5 text-sm text-muted-foreground">Votes from the most recently completed analysis cycle.</p>
+  <p className="mb-5 text-sm text-muted-foreground">Votes update as each image is classified during the active 30-second analysis.</p>
   {(() => {
     const record = ai as (typeof ai & { lastCycle?: { votes?: Record<string, number>; voteCounts?: Record<string, number> }; voteCounts?: Record<string, number>; transitionMode?: string; automaticControlEnabled?: boolean }) | null;
     const votes = sim?.active ? sim.votes : record?.lastCycle?.votes ?? record?.lastCycle?.voteCounts ?? record?.voteCounts ?? ai?.votes;
@@ -24,7 +24,10 @@ function AIPage(){const {data:ai,error,busy,classify}=useAI();const {data:hw}=us
       return typeof raw === "number" && Number.isFinite(raw) && raw >= 0 ? raw : 0;
     });
     const total = counts.reduce((sum, value) => sum + value, 0);
-    return total > 0 ? (
+    const running = Boolean(sim?.active ? sim.running : ai?.cycleRunning);
+    const failed = sim?.active ? 0 : Number(ai?.failedFrames ?? 0);
+    const processed = sim?.active ? Number(sim.framesAnalyzed ?? 0) : Number(ai?.framesAnalyzed ?? 0) + failed;
+    return (total > 0 || running) ? (
       <div className="space-y-4">
         {names.map((name, index) => (
           <div key={name}>
@@ -34,15 +37,31 @@ function AIPage(){const {data:ai,error,busy,classify}=useAI();const {data:hw}=us
             </div>
           </div>
         ))}
-        <p className="text-xs text-muted-foreground">{total} votes in the latest reported cycle.</p>
+        <div className="space-y-2 rounded-lg bg-surface p-3">
+          <div className="flex justify-between text-sm font-medium"><span>{running ? "Analyzing images live" : "Latest completed analysis"}</span><span className="tabular-nums">{Math.min(processed,30)}/30 images analyzed</span></div>
+          <div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full bg-emerald-700 transition-all duration-300" style={{width:`${Math.min(100,processed/30*100)}%`}} /></div>
+          <p className="text-xs text-muted-foreground">{total} valid votes{failed ? ` · ${failed} failed images` : ""}{running ? " · updating every second" : ""}</p>
+        </div>
       </div>
     ) : <p className="rounded-lg bg-surface p-4 text-sm text-muted-foreground">Waiting for completed analysis cycle. The backend must provide vote counts to display this chart.</p>;
   })()}
   <div className="mt-6 rounded-2xl border p-5">
     <h3 className="font-semibold">AI transition status</h3>
-    <p className="mt-2 text-sm text-muted-foreground">
-      The confirmed growth stage is <strong>{confirmed ?? "unavailable"}</strong>. Classification alone does not prove that a new stage was sent to Arduino. Automatic transition status will be shown when confirmed by the backend.
-    </p>
+    <p className="mt-2 text-sm">Confirmed hardware stage: <strong>{confirmed ?? "unavailable"}</strong></p>
+    {(() => {
+      const result = ai?.lastTransitionResult;
+      const transition = String(ai?.transitionStatus ?? "idle");
+      const hardware = String(ai?.hardwareTransitionStatus ?? "idle");
+      const success = result?.status === "applied";
+      const failed = ["send_failed", "ack_timeout"].includes(hardware);
+      return <div className="mt-3 space-y-2 text-sm">
+        <p><span className="font-semibold">Confirmation:</span> {transition === "pending" ? `Pending · ${ai?.transitionConfirmations ?? 0}/${ai?.transitionRequired ?? 3} valid cycles` : transition === "same_stage" ? "Already matches hardware stage" : transition.replaceAll("_"," ")}</p>
+        <p><span className="font-semibold">Hardware transition:</span> <span className={failed ? "text-red-600" : hardware === "applied" ? "text-emerald-700" : "text-muted-foreground"}>{hardware === "applied" ? "Completed — Arduino stage acknowledged" : hardware === "sending" ? "Waiting for Arduino acknowledgment" : hardware.replaceAll("_"," ")}</span></p>
+        {result && <p className={success ? "text-emerald-700" : "text-red-600"}>{success ? "✓ Last transition completed successfully" : "Last transition not completed"}: {result.from} → {result.to}{result.timestamp ? ` · ${new Date(result.timestamp).toLocaleString()}` : ""}</p>}
+        {ai?.hardwareTransitionError && <p className="text-red-600">{ai.hardwareTransitionError}</p>}
+        <p className="text-xs text-muted-foreground">Success is shown only after the Raspberry Pi observes the Arduino reporting the target stage. A completed 30-second vote alone is not a hardware transition.</p>
+      </div>;
+    })()}
   </div>
 </Card>
 <Card className="mt-5 overflow-x-auto"><CardTitle>Recent checks</CardTitle><p className="text-sm text-muted-foreground">No recorded classification history available yet. Latest result is shown above.</p></Card>
