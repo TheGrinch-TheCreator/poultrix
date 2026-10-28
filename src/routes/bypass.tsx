@@ -76,20 +76,24 @@ function BypassPage() {
     <p className="mb-4 text-xs text-muted-foreground">Hidden from navigation. This page does not replace authentication or physical emergency controls.</p>
     {!token ? <Card><CardTitle>Unlock maintenance controls</CardTitle><div className="mt-4 flex flex-wrap gap-2"><input aria-label="Maintenance password" type="password" autoComplete="off" className={inputClass+" max-w-sm"} value={password} onChange={e=>setPassword(e.target.value)} placeholder="Maintenance password"/><button className={btn} disabled={busy||!password} onClick={login}>Enter bypass</button></div></Card> : <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3"><div><b>Manual bypass active</b><p className="text-xs text-muted-foreground">{status?.expiresSeconds ?? 300}s remaining · Fan/LED states preserved on entry; outputs reset on exit</p></div><div className="flex flex-wrap gap-2"><button className={btn} disabled={busy} onClick={()=>perform("exit")}>Exit bypass & close gates</button><button className={btn+" border-green-600 text-green-700"} disabled={busy} onClick={()=>{if(window.confirm("Clear all manual overrides and request LIVE mode? Check that fans and lights can activate automatically."))perform("return-live");}}>Return to LIVE Mode</button></div></div>
-      <Card><CardTitle>Servo control — 10 channels</CardTitle>
-        <p className="my-2 text-xs text-muted-foreground">All 10 servos are listed for maintenance inspection. Physical movement is locked until the Arduino firmware and Raspberry Pi API support confirmed, supervised servo commands. The existing backend currently rejects dispensing with HTTP 423; this interface does not bypass that safety lock.</p>
+      <Card><CardTitle>Servo control — 2 compartments (10 servos)</CardTitle>
+        <p className="my-2 text-xs text-muted-foreground">Supervised timed group dispensing. One PCA9685 driver controls all 10 servos. Closed: 0° · Open: 90°. Arduino automatically closes the selected group after the requested duration (maximum 1.5 seconds). Only one group may run at a time. Keep feed compartments empty for initial testing.</p>
         <label className="block max-w-xs text-sm">Requested duration (seconds)
-          <input type="number" min="0.1" max="5" step="0.1" className={inputClass+" mt-1"} value={seconds} onChange={e=>setSeconds(e.target.value)}/>
+          <input type="number" min="0.1" max="1.5" step="0.1" className={inputClass+" mt-1"} value={seconds} onChange={e=>setSeconds(e.target.value)}/>
         </label>
-        <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-          {Array.from({length:10},(_,i)=>i+1).map(id=><div key={id} className="rounded-lg border p-3">
-            <p className="font-medium">Servo {id}</p>
-            <p className="mt-1 text-xs text-muted-foreground">{id<=3?"Feed gate channel":"Additional servo channel"}</p>
-            <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">Movement locked</p>
-            <button className={btn+" mt-3 w-full"} disabled title="Requires verified Arduino and backend servo support">Activate</button>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          {([1,2] as const).map(group=><div key={group} className="rounded-lg border p-4">
+            <p className="font-medium">Compartment {group} — 5 servos</p>
+            <p className="mt-1 text-xs text-muted-foreground">PCA9685 channels: {group===1?"0, 1, 2, 3, 4":"11, 12, 13, 14, 15"}</p>
+            <p className="mt-2 text-xs text-muted-foreground">0° CLOSED · 90° OPEN</p>
+            <button className={btn+" mt-3 w-full border-blue-600 text-blue-700"}
+              disabled={busy||!status?.active||!Number.isFinite(Number(seconds))||Number(seconds)<0.1||Number(seconds)>1.5}
+              onClick={()=>{if(window.confirm(`Dispense compartment ${group}: open all 5 servos for ${seconds} seconds? Confirm gates are empty and supervised.`))perform("action",{action:"dispense",group,seconds:Number(seconds)});}}>
+              Dispense Group {group}
+            </button>
           </div>)}
         </div>
-        <button className={btn+" mt-3 border-red-500 text-red-600"} disabled={busy} onClick={()=>perform("action",{action:"stop"})}>STOP ALL GATES</button>
+        <button className={btn+" mt-3 border-red-500 text-red-600"} onClick={()=>perform("action",{action:"stop"})}>STOP ALL GATES</button>
       </Card>
       <Card><CardTitle>Relay control</CardTitle><p className="my-2 text-xs text-muted-foreground">Fan, LED, and the single heater relay (D28 / IN7, both lamps together) require Arduino acknowledgment. All manual outputs turn OFF when bypass ends or the safety timeout expires.</p><div className="grid grid-cols-2 gap-2 sm:grid-cols-4">{names.map((name,i)=><button key={name} className={btn} disabled={busy||!relayReady} onClick={async()=>{const next=!relayState[i+1];setBusy(true);try{await call("action",{action:"relay",relay:i+1,on:next});setRelayState(s=>({...s,[i+1]:next}));setMessage("Relay command sent; verify actual output.");}catch(e){setMessage(e instanceof Error?e.message:String(e));}finally{setBusy(false);}}}>{name}: {relayState[i+1]?"ON":"OFF"}</button>)}</div></Card>
       <Card><CardTitle>Sensor test readings</CardTitle><p className="my-2 text-xs text-muted-foreground">Temperature test values drive fan relay logic; LDR raw test values drive LED relay logic. Hopper and trough values appear as SIMULATED on the weight API/dashboard, without changing HX711 calibration. Heater outputs are controlled manually; simulations do not activate heaters.</p><div className="grid gap-3 sm:grid-cols-2">{([['temperature','Temperature °C'],['ldr','LDR raw'],['hopper','Hopper grams'],['trough','Trough grams']] as const).map(([key,label])=><label key={key} className="text-sm">{label}<div className="mt-1 flex gap-2"><input className={inputClass} type="number" value={values[key]} onChange={e=>setValues(v=>({...v,[key]:e.target.value}))}/><button className={btn} disabled={busy} onClick={()=>perform("action",{action:"override",key,value:values[key]===""?null:Number(values[key])})}>Set</button></div></label>)}</div></Card>
