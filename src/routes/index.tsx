@@ -57,7 +57,8 @@ function Dashboard() {
   const target = hw?.temperatureTarget;
   const high = typeof temp === "number" && target && temp > target.max;
   const low = typeof temp === "number" && target && temp < target.min;
-  const stage = stageName(ai?.detectedStage);
+  const stage = connected ? stageName(hw?.stage) : null;
+  const detectedStage = stageName(ai?.detectedStage);
   const systemStatus = healthError ? "API unavailable" : health?.status || "Checking";
   const healthReady = health?.status === "READY" && connected;
   const gates = Object.entries(feeding?.gates ?? {});
@@ -82,14 +83,14 @@ function Dashboard() {
 
       <div className="grid gap-5 lg:grid-cols-3">
         <Card className="lg:col-span-2">
-          <CardTitle icon={<ScanEye className="h-4 w-4" />} right={<Link to="/ai-stage" className="text-xs font-semibold text-primary">AI details →</Link>}>AI growth stage</CardTitle>
+          <CardTitle icon={<ScanEye className="h-4 w-4" />} right={<Link to="/ai-stage" className="text-xs font-semibold text-primary">AI details →</Link>}>Confirmed growth stage</CardTitle>
           <div className="mt-2 text-5xl font-extrabold">{stage || "—"}</div>
-          <p className="mt-2 text-sm text-muted-foreground">{stage && typeof ai?.confidence === "number" ? `${ai.confidence.toFixed(1)}% confidence` : "Awaiting a completed classification"}</p>
+          <p className="mt-2 text-sm text-muted-foreground">{stage ? "Arduino-confirmed growth stage (restored after restart)" : "Waiting for Arduino confirmation"}</p>
           <div className="mt-4 grid grid-cols-2 gap-3">
             <Stat label="AI status" value={ai?.status || "Unavailable"} />
             <Stat label="Last analyzed" value={formatDate(ai?.lastInference)} />
           </div>
-          <p className="mt-3 text-xs text-muted-foreground">AI-detected stage is shown separately from the Arduino's current control stage ({connected ? stageName(hw?.stage) || "Unknown" : "Unavailable"}).</p>
+          <p className="mt-3 text-xs text-muted-foreground">Latest AI detection: {detectedStage || "Not available"}. The main stage above comes from Arduino confirmation, not an unconfirmed AI prediction.</p>
         </Card>
         <Card>
           <CardTitle icon={<Thermometer className="h-4 w-4" />} right={<Pill tone={!live || temp == null ? "neutral" : high || low ? "warn" : "ok"}>{!live || temp == null ? "No live reading" : high ? "Above target" : low ? "Below target" : "In range"}</Pill>}>Temperature</CardTitle>
