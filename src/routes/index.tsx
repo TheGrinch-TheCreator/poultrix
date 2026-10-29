@@ -1,3 +1,4 @@
+import { FeedingPlanner } from "@/components/poultrix/FeedingPlanner";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Activity, Camera, Cpu, Droplets, Fan, Flame, Lightbulb, ScanEye, Sun, Thermometer, Wheat } from "lucide-react";
@@ -68,6 +69,7 @@ function Dashboard() {
 
   return (
     <div className="space-y-5">
+      <FeedingPlanner />
       <Card>
         <CardTitle icon={<Activity className="h-4 w-4" />} right={<Pill tone={healthReady ? "ok" : "warn"}>{systemStatus}</Pill>}>Live Poultrix system</CardTitle>
         <p className="text-sm text-muted-foreground">{healthReady ? "Monitored services are responding." : health?.issues?.length ? health.issues.join(" · ") : "Waiting for a healthy connection to the Raspberry Pi."}</p>

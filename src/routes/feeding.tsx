@@ -1,3 +1,4 @@
+import { FeedingPlanner } from "@/components/poultrix/FeedingPlanner";
 import { useEffect, useState } from "react";
 import { API_URL } from "@/lib/live-hardware";
 
@@ -69,5 +70,5 @@ export const Route = createFileRoute("/feeding")({
 const STEPS = ["Growth stage", "Feed type", "Target amount", "Gates open", "Weighing", "Target reached", "Complete"];
 
 function FeedingPage() {
- return <main className="space-y-4"><LiveCompartmentManager /></main>;
+ return <main className="space-y-4"><FeedingPlanner manual /><LiveCompartmentManager /></main>;
 }

@@ -1,3 +1,4 @@
+import { FeedingPlanner } from "@/components/poultrix/FeedingPlanner";
 import { createFileRoute } from "@tanstack/react-router";
 import { Camera } from "lucide-react";
 import { FlockWebRTCPreview } from "@/components/poultrix/FlockWebRTCPreview";
@@ -100,38 +101,7 @@ function FlockPage() {
           </p>
         </Card>
       </div>
-      <Card className="mt-5">
-        <CardTitle>Feeding setup</CardTitle>
-        <p className="mb-4 text-sm text-muted-foreground">Enter the flock size. The feed allowance is estimated automatically from the confirmed growth stage.</p>
-        <label className="block text-sm font-medium">Number of birds
-          <input type="number" min="1" step="1" value={birdCount} onChange={(e) => { setBirdCount(e.target.value); setSaved(false); }} placeholder="e.g. 10" className="mt-2 w-full rounded-lg border bg-background px-3 py-2" />
-        </label>
-        <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <div className="rounded-xl bg-surface p-4">
-            <p className="text-sm text-muted-foreground">Confirmed stage allowance</p>
-            <p className="mt-1 text-xl font-bold">{allowance ? `${allowance.dailyGrams} g/bird/day` : "—"}</p>
-            <p className="mt-1 text-xs text-muted-foreground">{allowance?.range ?? "Waiting for confirmed stage"} · midpoint estimate</p>
-          </div>
-          <div className="rounded-xl bg-surface p-4">
-            <p className="text-sm text-muted-foreground">Feeding sessions per day</p>
-            <p className="mt-1 text-xl font-bold">{allowance?.sessions ?? "—"}</p>
-          </div>
-        </div>
-        <div className="mt-4 rounded-xl bg-surface p-4">
-          <p className="text-sm text-muted-foreground">Estimated feed target per session · confirmed {stage ?? "stage unavailable"}</p>
-          <p className="mt-1 text-2xl font-bold">{totalGrams === null ? "—" : `${totalGrams.toLocaleString(undefined, {maximumFractionDigits: 1})} g`}</p>
-          {allowance && validBirds && (
-            <p className="mt-2 text-xs text-muted-foreground">
-              {Number(birdCount).toLocaleString()} birds × {allowance.dailyGrams} g/bird/day ÷ {allowance.sessions} sessions/day
-              {dailyFlockGrams !== null ? ` · ${dailyFlockGrams.toLocaleString()} g/day for the flock` : ""}
-            </p>
-          )}
-          {!stage && <p className="mt-2 text-xs text-muted-foreground">Waiting for the confirmed stage from Arduino. AI detections do not change the feed allowance until the stage is confirmed.</p>}
-        </div>
-        <button type="button" onClick={saveFeedingSetup} disabled={!validBirds} className="mt-4 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50">Save bird count</button>
-        {saved && <p className="mt-2 text-sm text-muted-foreground">Bird count saved in this browser.</p>}
-        <p className="mt-3 text-xs text-muted-foreground">The feeding ranges are from Poultrix System Documentation v3, not an independently verified feed-manufacturer chart. The documentation varies feed by age within each stage; this stage-only midpoint is an estimate, not a precise ration. The count is stored only in this browser and does not yet control the feeder. Raspberry Pi integration, load-cell verification, and safety limits are required before automatic dispensing.</p>
-      </Card>
+      <FeedingPlanner editable />
       <Card className="mt-5">
         <CardTitle>Batch timeline</CardTitle>
         <p className="text-sm text-muted-foreground">
