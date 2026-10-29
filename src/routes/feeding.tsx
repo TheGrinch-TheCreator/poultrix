@@ -70,5 +70,5 @@ export const Route = createFileRoute("/feeding")({
 const STEPS = ["Growth stage", "Feed type", "Target amount", "Gates open", "Weighing", "Target reached", "Complete"];
 
 function FeedingPage() {
- return <main className="space-y-4"><FeedingPlanner manual /><LiveCompartmentManager /></main>;
+ return <main className="space-y-4"><LiveCompartmentManager /><FeedingPlanner manual /></main>;
 }
