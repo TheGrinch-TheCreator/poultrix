@@ -47,7 +47,6 @@ function Dashboard() {
   const { data: ai, error: aiError } = useAI();
   const { data: weight, error: weightError } = useEndpoint<WeightPayload>("/api/feeding/weight");
   const { data: feeding, error: feedingError } = useEndpoint<Feeding>("/api/feeding/status");
-  const { data: scheduleTest } = useEndpoint<{status:string;testMode:boolean;slot:string|null;remainingSeconds:number;targetGrams:number|null;stage:string|null;error:string|null}>("/api/schedule-test/status");
   const { data: feedingPlan, error: planError } = useEndpoint<FeedingPlan>("/api/feeding/config");
   const [clock, setClock] = useState(() => Date.now());
   useEffect(() => { const timer = setInterval(() => setClock(Date.now()), 1000); return () => clearInterval(timer); }, []);
@@ -72,7 +71,6 @@ function Dashboard() {
 
   return (
     <div className="space-y-5">
-      {scheduleTest?.testMode && <Card><CardTitle>Maintenance schedule test</CardTitle><p className="mt-2 text-sm">{scheduleTest.stage} · Slot {scheduleTest.slot} · {scheduleTest.targetGrams} g · {scheduleTest.status === "countdown" ? `${scheduleTest.remainingSeconds}s remaining` : scheduleTest.status}</p><p className="text-xs text-muted-foreground">Accelerated test, not a real scheduled feeding. Normal schedule returns when maintenance is cleared.</p></Card>}
       <div className="grid gap-5 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardTitle icon={<ScanEye className="h-4 w-4" />} right={<Link to="/ai-stage" className="text-xs font-semibold text-primary">AI details →</Link>}>Confirmed growth stage</CardTitle>
