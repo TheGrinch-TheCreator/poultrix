@@ -36,13 +36,13 @@ function BypassPage() {
       const result=await call(path,data);
       if (path === "return-live") {
         setRelayState({}); setRelayReady(false);
-        setMessage(result.status === "live" ? "Real sensor readings and automatic LIVE control restored. Maintenance login remains unlocked." : "Overrides cleared; Arduino is not confirmed LIVE. Maintenance login remains unlocked. Check System Status and recovery diagnostics.");
+        setMessage(result.status === "live" ? "Real sensor readings and automatic LIVE control restored. Maintenance login remains unlocked." : "Overrides cleared; Arduino is not confirmed LIVE. Maintenance login remains unlocked. Use system LIVE controls when safe.");
         setStatus((prev:any) => ({...prev,active:false,manualControlsPaused:true,readings:{}}));
       } else if (path === "resume") {
         setMessage("Manual bypass resumed. Maintenance login remains unlocked.");
         setStatus((prev:any) => ({...prev,active:true,manualControlsPaused:false}));
       } else {
-        setMessage(result.simulation ? "Test override saved. Fan/LED responses (when applicable) were acknowledged; physical sensors and HX711 calibration unchanged." : "Command accepted by Raspberry Pi (verify hardware response).");
+        setMessage(path === "action" && result.action === "dispense" ? `Arduino acknowledged compartment ${result.group} for ${Number(result.durationMs)/1000}s. Verify physical gate movement and closure.` : result.simulation ? "Test override saved. Fan/LED responses (when applicable) were acknowledged; physical sensors and HX711 calibration unchanged." : "Command accepted by Raspberry Pi (verify hardware response).");
         if(path === "exit") {clearSession();setRelayState({});setRelayReady(false);}
       }
     }
@@ -75,9 +75,9 @@ function BypassPage() {
     {!token ? <Card><CardTitle>Unlock maintenance controls</CardTitle><div className="mt-4 flex flex-wrap gap-2"><input aria-label="Maintenance password" type="password" autoComplete="off" className={inputClass+" max-w-sm"} value={password} onChange={e=>setPassword(e.target.value)} placeholder="Maintenance password"/><button className={btn} disabled={busy||!password} onClick={login}>Enter bypass</button></div></Card> : <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3"><div><b>Manual bypass active</b><p className="text-xs text-muted-foreground">{status?.expiresSeconds != null ? `${Math.ceil(status.expiresSeconds / 60)} min remaining` : "Checking session…"} · Return to LIVE restores real readings and automatic controls without logging out</p></div><div className="flex flex-wrap gap-2"><button className={btn} disabled={busy} onClick={()=>perform("exit")}>Exit bypass & close gates</button><button className={btn+" border-green-600 text-green-700"} disabled={busy} onClick={()=>{if(window.confirm("Clear all manual overrides and request LIVE mode? Check that fans and lights can activate automatically."))perform("return-live");}}>Return to LIVE Mode</button>{status?.manualControlsPaused && <button className={btn} disabled={busy} onClick={()=>perform("resume")}>Resume Manual Bypass</button>}</div></div>
       <Card><CardTitle>Servo control — 2 compartments (10 servos)</CardTitle>
-        <p className="my-2 text-xs text-muted-foreground">Supervised timed group dispensing. One PCA9685 driver controls all 10 servos. Closed: 0° · Open: 90°. Arduino automatically closes the selected group after the requested duration (maximum 1.5 seconds). Only one group may run at a time. Keep feed compartments empty for initial testing.</p>
+        <p className="my-2 text-xs text-muted-foreground">Supervised timed group dispensing. One PCA9685 driver controls all 10 servos. Closed: 0° · Open: 90°. Arduino automatically closes the selected group after the requested duration (maximum 10 seconds). Only one group may run at a time. Keep feed compartments empty for initial testing.</p>
         <label className="block max-w-xs text-sm">Requested duration (seconds)
-          <input type="number" min="0.1" max="1.5" step="0.1" className={inputClass+" mt-1"} value={seconds} onChange={e=>setSeconds(e.target.value)}/>
+          <input type="number" min="0.1" max="10" step="0.1" className={inputClass+" mt-1"} value={seconds} onChange={e=>setSeconds(e.target.value)}/>
         </label>
         <div className="mt-3 grid gap-3 sm:grid-cols-2">
           {([1,2] as const).map(group=><div key={group} className="rounded-lg border p-4">
@@ -85,7 +85,7 @@ function BypassPage() {
             <p className="mt-1 text-xs text-muted-foreground">PCA9685 channels: {group===1?"0, 1, 2, 3, 4":"11, 12, 13, 14, 15"}</p>
             <p className="mt-2 text-xs text-muted-foreground">0° CLOSED · 90° OPEN</p>
             <button className={btn+" mt-3 w-full border-blue-600 text-blue-700"}
-              disabled={busy||!status?.active||!Number.isFinite(Number(seconds))||Number(seconds)<0.1||Number(seconds)>1.5}
+              disabled={busy||!status?.active||!Number.isFinite(Number(seconds))||Number(seconds)<0.1||Number(seconds)>10}
               onClick={()=>{if(window.confirm(`Dispense compartment ${group}: open all 5 servos for ${seconds} seconds? Confirm gates are empty and supervised.`))perform("action",{action:"dispense",group,seconds:Number(seconds)});}}>
               Dispense Group {group}
             </button>

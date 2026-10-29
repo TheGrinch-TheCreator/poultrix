@@ -99,9 +99,9 @@ function HardwarePage() {
       { name: "AI classification model", detail: aiError ? `AI endpoint: ${aiError}` : ai?.status ? `Model status: ${ai.status}` : "Model status not reported", condition: aiError ? "unknown" : connection(health?.aiModel) },
     ] },
     { title: "Environmental sensors", components: [
-      { name: "DHT22 temperature", detail: !live ? "Live hardware telemetry unavailable" : typeof hw?.temperature === "number" ? `${hw.temperature.toFixed(1)} °C reported` : "No live temperature reading", condition: sensors(hw?.temperature) },
-      { name: "DHT22 humidity", detail: !live ? "Live hardware telemetry unavailable" : typeof hw?.humidity === "number" ? `${hw.humidity.toFixed(1)}% reported` : "No live humidity reading", condition: sensors(hw?.humidity) },
-      { name: "LDR light sensor", detail: !live ? "Live hardware telemetry unavailable" : typeof hw?.lightRaw === "number" ? `ADC reading: ${hw.lightRaw}` : "No live light reading", condition: sensors(hw?.lightRaw) },
+      { name: "DHT22 temperature", detail: !live ? "LIVE mode required to validate sensor" : typeof hw?.temperature === "number" ? `${hw.temperature.toFixed(1)} °C reported` : "No live temperature reading", condition: sensors(hw?.temperature) },
+      { name: "DHT22 humidity", detail: !live ? "LIVE mode required to validate sensor" : typeof hw?.humidity === "number" ? `${hw.humidity.toFixed(1)}% reported` : "No live humidity reading", condition: sensors(hw?.humidity) },
+      { name: "LDR light sensor", detail: !live ? "LIVE mode required to validate sensor" : typeof hw?.lightRaw === "number" ? `ADC reading: ${hw.lightRaw}` : "No live light reading", condition: sensors(hw?.lightRaw) },
     ] },
     { title: "Environmental controls", components: [
       ...Array.from({ length: 4 }, (_, i): Component => ({ name: `Cooling fan ${i + 1}`, detail: "Arduino-reported relay command; not physical feedback", condition: actuator(fans?.[i]) })),
@@ -135,7 +135,7 @@ function HardwarePage() {
         </div>
         {issues.length > 0 && <div className="mt-4 rounded-lg border border-destructive/30 p-3 text-sm"><div className="font-semibold text-destructive">Reported problems</div><ul className="mt-2 list-inside list-disc">{issues.map((issue, i) => <li key={i}>{issue}</li>)}</ul></div>}
         {healthError && <p className="mt-3 text-sm text-destructive">Health endpoint unavailable: {healthError}</p>}
-        {!live && <p className="mt-3 text-xs text-muted-foreground">Hardware telemetry unavailable. Check connectivity and sensor health.</p>}
+        {!live && <p className="mt-3 text-xs text-muted-foreground">Sensors require LIVE mode for actual readings. Unknown does not automatically mean faulty.</p>}
         <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground"><RefreshCw className="h-3.5 w-3.5" /> Automatic refresh every 3 seconds. Relay and servo statuses are commands/reports, not proof of physical movement.</p>
       </Card>
       <div className="grid gap-5 lg:grid-cols-2">
