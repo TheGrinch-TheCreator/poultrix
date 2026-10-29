@@ -3,10 +3,10 @@ import { useEffect, useState, type ReactNode } from "react";
 import {
   LayoutDashboard, Bird, Wheat, Thermometer, ScanEye, Bell, Cpu, CalendarRange, LineChart, Settings, UserRound, Wifi,
 } from "lucide-react";
-import { farm, alerts } from "@/lib/demo-data";
+import { farm } from "@/lib/demo-data";
 import { getMyFarm, type PoultrixFarm } from "@/lib/farm-store";
 import poultrixLogo from "@/assets/poultrix-logo.png";
-import { usePx } from "./v3";
+import { useLiveAlerts } from "@/lib/live-alerts";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useProfile } from "@/hooks/use-profile";
 import { API_URL } from "@/lib/live-hardware";
@@ -47,7 +47,7 @@ function Logo() {
 
 export function AppShell({ children }: { children: ReactNode }) {
   const path = useRouterState({ select: (s) => s.location.pathname });
-  const s = usePx();
+  const { count: active } = useLiveAlerts();
   const { profile, avatarUrl } = useProfile();
   const [systemMode, setSystemMode] = useState<"live" | "safe" | "unknown">("unknown");
   const [hardwareConnected, setHardwareConnected] = useState(false);
@@ -103,7 +103,6 @@ export function AppShell({ children }: { children: ReactNode }) {
   };
   const [savedFarm, setSavedFarm] = useState<PoultrixFarm | null>(null);
   useEffect(() => { let mounted=true; const refresh=()=>{getMyFarm().then(f=>{if(mounted)setSavedFarm(f);}).catch(console.error);};refresh();window.addEventListener("poultrix:farm-updated",refresh);return()=>{mounted=false;window.removeEventListener("poultrix:farm-updated",refresh);};},[]);
-  const active = alerts.filter((a) => a.status === "Active" && !s.acked.includes(a.id)).length;
 
   return (
     <div className="min-h-screen lg:grid lg:grid-cols-[260px_1fr]">
