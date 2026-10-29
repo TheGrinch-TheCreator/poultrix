@@ -10,6 +10,12 @@ const SESSION_KEY = "poultrix_maintenance_token";
 const names = ["Fan 1", "Fan 2", "Fan 3", "Fan 4", "LED", "Heater Lamps (2 × D28/IN7)"];
 function BypassPage() {
   const [password, setPassword] = useState("");
+  const [slot,setSlot]=useState("09:00");
+  const [countdown,setCountdown]=useState("30");
+  const [testStatus,setTestStatus]=useState<any>(null);
+  const [feedPlan,setFeedPlan]=useState<any>(null);
+  const testStage = ["STARTER","GROWER","FINISHER"].includes(status?.overrides?.stage) ? status.overrides.stage : feedPlan?.confirmedStage;
+  const testSlots = testStage === "STARTER" ? ["06:00","09:00","12:00","15:00","18:00","21:00"] : ["06:00","10:00","14:00","18:00"];
   const [token, setToken] = useState(() => { try { return localStorage.getItem(SESSION_KEY) || ""; } catch { return ""; } });
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("Maintenance controls are inactive.");
@@ -54,6 +60,8 @@ function BypassPage() {
     if(!token)return;
     const refresh = () => call("status",undefined,token).then(result=>{
       setStatus(result);
+      void fetch(`${BASE}/api/schedule-test/status`).then(r=>r.json()).then(setTestStatus).catch(()=>{});
+      void fetch(`${BASE}/api/feeding/config`).then(r=>r.json()).then(setFeedPlan).catch(()=>{});
       if (Array.isArray(result.relays) && result.relays.length === 6) {
         setRelayState(Object.fromEntries(result.relays.map((v:boolean,i:number)=>[i+1,Boolean(v)])));
         setRelayReady(true);
@@ -74,6 +82,16 @@ function BypassPage() {
     <p className="mb-4 text-xs text-muted-foreground">Hidden from navigation. This page does not replace authentication or physical emergency controls.</p>
     {!token ? <Card><CardTitle>Unlock maintenance controls</CardTitle><div className="mt-4 flex flex-wrap gap-2"><input aria-label="Maintenance password" type="password" autoComplete="off" className={inputClass+" max-w-sm"} value={password} onChange={e=>setPassword(e.target.value)} placeholder="Maintenance password"/><button className={btn} disabled={busy||!password} onClick={login}>Enter bypass</button></div></Card> : <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3"><div><b>Manual bypass active</b><p className="text-xs text-muted-foreground">{status?.expiresSeconds != null ? `${Math.ceil(status.expiresSeconds / 60)} min remaining` : "Checking session…"} · Return to LIVE restores real readings and automatic controls without logging out</p></div><div className="flex flex-wrap gap-2"><button className={btn} disabled={busy} onClick={()=>perform("exit")}>Exit bypass & close gates</button><button className={btn+" border-green-600 text-green-700"} disabled={busy} onClick={()=>{if(window.confirm("Clear all manual overrides and request LIVE mode? Check that fans and lights can activate automatically."))perform("return-live");}}>Return to LIVE Mode</button>{status?.manualControlsPaused && <button className={btn} disabled={busy} onClick={()=>perform("resume")}>Resume Manual Bypass</button>}</div></div>
+      <Card><CardTitle>Schedule test · accelerated countdown</CardTitle>
+        <p className="my-2 text-xs text-muted-foreground">Maintenance test, not an actual scheduled feeding. Uses the active stage and saved bird count. Gate movement is real when the countdown reaches zero; supervise the system.</p>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <label className="text-sm">Schedule slot<select className={inputClass+" mt-1"} value={testSlots.includes(slot)?slot:testSlots[0]} onChange={e=>setSlot(e.target.value)}>{testSlots.map((v:string)=><option key={v} value={v}>{v}</option>)}</select></label>
+          <label className="text-sm">Countdown (seconds)<input className={inputClass+" mt-1"} type="number" min="1" max="3600" value={countdown} onChange={e=>setCountdown(e.target.value)}/></label>
+          <div className="text-sm">Per-session target<p className="mt-2 font-semibold">{feedPlan?.birdCount && testStage ? (feedPlan.birdCount * ({STARTER:35,GROWER:90,FINISHER:135} as Record<string,number>)[testStage] / testSlots.length).toFixed(1) : "—"} g · {feedPlan?.birdCount??"—"} birds · {testStage??"—"}</p></div>
+        </div>
+        <p className="mt-3 text-sm">{testStatus?.status==="countdown"?`Test countdown: ${testStatus.remainingSeconds}s until ${testStatus.slot}`:testStatus?.status?`Test status: ${testStatus.status}`:"No active test"}{testStatus?.error?` · ${testStatus.error}`:""}</p>
+        <div className="mt-3 flex flex-wrap gap-2"><button className={btn} disabled={busy||!status?.active||testStatus?.status==="countdown"||testStatus?.status==="dispensing"} onClick={async()=>{if(!window.confirm("Start accelerated schedule test? This WILL dispense real feed after the countdown."))return;setBusy(true);try{const r=await call("schedule-test",{slot:testSlots.includes(slot)?slot:testSlots[0],countdownSeconds:Number(countdown)});setTestStatus(r);setMessage("Schedule test armed. Keep the hardware supervised.");}catch(e){setMessage(String(e));}finally{setBusy(false);}}}>Start schedule test</button><button className={btn+" border-red-500"} onClick={()=>perform("schedule-test/cancel")}>Cancel test / STOP</button></div>
+      </Card>
       <Card><CardTitle>Servo control — 2 compartments (10 servos)</CardTitle>
         <p className="my-2 text-xs text-muted-foreground">Supervised timed group dispensing. One PCA9685 driver controls all 10 servos. Closed: 0° · Open: 90°. Arduino automatically closes the selected group after the requested duration (maximum 10 seconds). Only one group may run at a time. Keep feed compartments empty for initial testing.</p>
         <label className="block max-w-xs text-sm">Requested duration (seconds)
