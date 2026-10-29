@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { Activity, Camera, Cpu, Droplets, Fan, Flame, Lightbulb, ScanEye, Sun, Thermometer, Wheat } from "lucide-react";
+import { Camera, Cpu, Droplets, Fan, Flame, Lightbulb, ScanEye, Sun, Thermometer, Wheat } from "lucide-react";
 import { Card, CardTitle, Pill } from "@/components/poultrix/ui";
 import { API_URL, useAI, useHardware, display, stageName } from "@/lib/live-hardware";
 import { formatWeight, readingStatus, formatReadingTime, type WeightPayload } from "@/lib/live-weights";
@@ -10,7 +10,7 @@ export const Route = createFileRoute("/")({
   component: Dashboard,
 });
 
-type FeedingPlan = { times?: string[]; selectedCompartment?: number | null; confirmedStage?: string; automationStatus?: string };
+type FeedingPlan = { targetGrams?: number | null; times?: string[]; selectedCompartment?: number | null; confirmedStage?: string; automationStatus?: string };
 
 type Health = { status?: string; issues?: string[]; lastChecked?: string; internet?: boolean; camera?: boolean; arduino?: boolean; aiModel?: boolean; dht22?: string | null };
 
@@ -45,7 +45,6 @@ function useEndpoint<T>(path: string) {
 function Dashboard() {
   const { data: hw, error: hardwareError } = useHardware();
   const { data: ai, error: aiError } = useAI();
-  const { data: health, error: healthError } = useEndpoint<Health>("/api/system/health");
   const { data: weight, error: weightError } = useEndpoint<WeightPayload>("/api/feeding/weight");
   const { data: feeding, error: feedingError } = useEndpoint<Feeding>("/api/feeding/status");
   const { data: feedingPlan, error: planError } = useEndpoint<FeedingPlan>("/api/feeding/config");
@@ -63,8 +62,6 @@ function Dashboard() {
   const low = typeof temp === "number" && target && temp < target.min;
   const stage = connected ? stageName(hw?.stage) : null;
   const detectedStage = stageName(ai?.detectedStage);
-  const systemStatus = healthError ? "API unavailable" : health?.status || "Checking";
-  const healthReady = health?.status === "READY" && connected;
   const gates = Object.entries(feeding?.gates ?? {});
   const activeGates = gates.filter(([, gate]) => gate.status === "DISPENSING");
   const hopper = weight?.hopper;
@@ -74,26 +71,13 @@ function Dashboard() {
 
   return (
     <div className="space-y-5">
-      <Card>
-        <CardTitle icon={<Activity className="h-4 w-4" />} right={<Pill tone={healthReady ? "ok" : "warn"}>{systemStatus}</Pill>}>Live Poultrix system</CardTitle>
-        <p className="text-sm text-muted-foreground">{healthReady ? "Monitored services are responding." : health?.issues?.length ? health.issues.join(" · ") : "Waiting for a healthy connection to the Raspberry Pi."}</p>
-        <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
-          <span>Arduino: {connected ? "Connected" : "Unavailable"}</span><span>·</span>
-          <span>Mode: {connected ? mode?.toUpperCase() || "Unknown" : "Unavailable"}</span><span>·</span>
-          <span>Camera: {hw?.camera?.connected ? "Connected" : "Unavailable"}</span><span>·</span>
-          <span>AI: {aiError ? "Unavailable" : ai?.status || "Waiting"}</span>
-        </div>
-        {mode === "test" && <p className="mt-3 rounded-lg bg-surface px-3 py-2 text-sm">Arduino is in TEST mode. Simulated temperature and lighting values are intentionally hidden here. Switch to LIVE mode when the sensors are ready.</p>}
-        {hardwareError && <p className="mt-2 text-xs text-destructive">Hardware API: {hardwareError}</p>}
-      </Card>
-
       <div className="grid gap-5 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardTitle icon={<ScanEye className="h-4 w-4" />} right={<Link to="/ai-stage" className="text-xs font-semibold text-primary">AI details →</Link>}>Confirmed growth stage</CardTitle>
           <div className="mt-2 text-5xl font-extrabold">{stage || "—"}</div>
           <p className="mt-2 text-sm text-muted-foreground">{stage ? "Arduino-confirmed growth stage (restored after restart)" : "Waiting for Arduino confirmation"}</p>
           <div className="mt-4 grid grid-cols-2 gap-3">
-            <Stat label="AI status" value={ai?.status || "Unavailable"} />
+            <Stat label="AI confidence" value={typeof ai?.confidence === "number" && Number.isFinite(ai.confidence) && ai?.lastInference ? `${ai.confidence.toFixed(1)}%` : "—"} />
             <Stat label="Last analyzed" value={formatDate(ai?.lastInference)} />
           </div>
           <p className="mt-3 text-xs text-muted-foreground">Latest AI detection: {detectedStage || "Not available"}. The main stage above comes from Arduino confirmation, not an unconfirmed AI prediction.</p>
@@ -131,6 +115,9 @@ function Dashboard() {
               <div className="mt-3 text-xs text-muted-foreground">Countdown</div>
               <div className="num mt-1 text-3xl font-bold tabular-nums" aria-label="Time remaining until next scheduled feeding">{nextFeeding ? formatCountdown(nextFeeding.remainingMs) : "—"}</div>
               {nextFeeding && <p className="mt-1 text-xs text-muted-foreground">{nextFeeding.tomorrow ? "Tomorrow" : "Today"} · device local time</p>}
+              <div className="mt-4 text-xs uppercase tracking-wider text-muted-foreground">Next feeding target</div>
+              <div className="num mt-1 text-2xl font-bold">{nextFeeding && typeof feedingPlan?.targetGrams === "number" && Number.isFinite(feedingPlan.targetGrams) && feedingPlan.targetGrams > 0 ? `${feedingPlan.targetGrams.toLocaleString(undefined, { maximumFractionDigits: 2 })} g` : "—"}</div>
+              <p className="mt-1 text-xs text-muted-foreground">Planned amount per session, based on the saved flock size and confirmed growth stage.</p>
               <div className="mt-4 text-xs uppercase tracking-wider text-muted-foreground">Assigned feed compartment</div>
               <div className="mt-2 flex items-center gap-2">
                 {assignedCompartment === 1 || assignedCompartment === 2 ? <>
