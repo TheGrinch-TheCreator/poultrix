@@ -36,7 +36,7 @@ function BypassPage() {
       const result=await call(path,data);
       if (path === "return-live") {
         setRelayState({}); setRelayReady(false);
-        setMessage(result.status === "live" ? "Real sensor readings and automatic LIVE control restored. Maintenance login remains unlocked." : "Overrides cleared; Arduino is not confirmed LIVE. Maintenance login remains unlocked. Use system LIVE controls when safe.");
+        setMessage(result.status === "live" ? "Real sensor readings and automatic LIVE control restored. Maintenance login remains unlocked." : "Overrides cleared; Arduino is not confirmed LIVE. Maintenance login remains unlocked. Check System Status and recovery diagnostics.");
         setStatus((prev:any) => ({...prev,active:false,manualControlsPaused:true,readings:{}}));
       } else if (path === "resume") {
         setMessage("Manual bypass resumed. Maintenance login remains unlocked.");

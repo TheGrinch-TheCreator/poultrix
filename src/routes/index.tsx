@@ -90,7 +90,7 @@ function Dashboard() {
             <Stat label="Humidity" value={display(humidity, "%")} icon={<Droplets className="h-4 w-4" />} />
             <Stat label="LDR raw" value={typeof rawLight === "number" ? String(rawLight) : "—"} icon={<Sun className="h-4 w-4" />} />
           </div>
-          <p className="mt-3 text-xs text-muted-foreground">{!live ? "LIVE mode required for actual sensor readings." : "Readings reported by Arduino sensors."}</p>
+          <p className="mt-3 text-xs text-muted-foreground">{!live ? "Hardware offline or sensor telemetry unavailable." : "Readings reported by Arduino sensors."}</p>
         </Card>
       </div>
 
