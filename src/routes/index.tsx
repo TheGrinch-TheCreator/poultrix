@@ -1,16 +1,16 @@
-import { FeedingPlanner } from "@/components/poultrix/FeedingPlanner";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Activity, Camera, Cpu, Droplets, Fan, Flame, Lightbulb, ScanEye, Sun, Thermometer, Wheat } from "lucide-react";
 import { Card, CardTitle, Pill } from "@/components/poultrix/ui";
 import { API_URL, useAI, useHardware, display, stageName } from "@/lib/live-hardware";
 import { formatWeight, readingStatus, formatReadingTime, type WeightPayload } from "@/lib/live-weights";
-import { SERVO_COMPARTMENTS } from "@/lib/servo-compartments";
 
 export const Route = createFileRoute("/")({
   head: () => ({ meta: [{ title: "Dashboard — POULTRIX" }, { name: "description", content: "Live Poultrix hardware monitoring" }] }),
   component: Dashboard,
 });
+
+type FeedingPlan = { times?: string[]; selectedCompartment?: number | null; confirmedStage?: string; automationStatus?: string };
 
 type Health = { status?: string; issues?: string[]; lastChecked?: string; internet?: boolean; camera?: boolean; arduino?: boolean; aiModel?: boolean; dht22?: string | null };
 
@@ -48,6 +48,9 @@ function Dashboard() {
   const { data: health, error: healthError } = useEndpoint<Health>("/api/system/health");
   const { data: weight, error: weightError } = useEndpoint<WeightPayload>("/api/feeding/weight");
   const { data: feeding, error: feedingError } = useEndpoint<Feeding>("/api/feeding/status");
+  const { data: feedingPlan, error: planError } = useEndpoint<FeedingPlan>("/api/feeding/config");
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => { const timer = setInterval(() => setClock(Date.now()), 1000); return () => clearInterval(timer); }, []);
 
   const connected = hw?.connected === true && !hardwareError;
   const mode = hw?.mode?.toLowerCase();
@@ -66,10 +69,11 @@ function Dashboard() {
   const activeGates = gates.filter(([, gate]) => gate.status === "DISPENSING");
   const hopper = weight?.hopper;
   const trough = weight?.trough;
+  const nextFeeding = getNextFeeding(feedingPlan?.times, clock);
+  const assignedCompartment = feedingPlan?.selectedCompartment;
 
   return (
     <div className="space-y-5">
-      <FeedingPlanner />
       <Card>
         <CardTitle icon={<Activity className="h-4 w-4" />} right={<Pill tone={healthReady ? "ok" : "warn"}>{systemStatus}</Pill>}>Live Poultrix system</CardTitle>
         <p className="text-sm text-muted-foreground">{healthReady ? "Monitored services are responding." : health?.issues?.length ? health.issues.join(" · ") : "Waiting for a healthy connection to the Raspberry Pi."}</p>
@@ -121,17 +125,24 @@ function Dashboard() {
               <p className="mt-1 text-xs text-muted-foreground">{formatReadingTime(trough)}</p>
               {!hopper && !trough && <p className="mt-2 text-xs text-amber-600">The API has not supplied separate hopper and trough fields. Verify the Raspberry Pi parser before displaying weights.</p>}
             </div>
-            <div className="rounded-xl border p-4">
-              <div className="text-xs uppercase tracking-wider text-muted-foreground">Dispensing status</div>
-              <div className="mt-2 text-2xl font-bold">{feedingError || !feeding?.connected ? "Unavailable" : activeGates.length ? "Dispensing" : feeding?.pending ? "Starting" : gates.length ? "Not dispensing" : "Waiting"}</div>
-              <p className="mt-2 text-sm text-muted-foreground">{activeGates.length ? `Active gate(s): ${activeGates.map(([id]) => id).join(", ")}` : "Servo states reported by Arduino"}</p>
-              <p className="mt-2 text-xs text-muted-foreground">{feedingError ? `Feeding API: ${feedingError}` : "Dispensed amounts based on servo timing are estimates, not verified scale measurements."}</p>
+            <div className="rounded-xl border p-4" aria-live="off">
+              <div className="text-xs uppercase tracking-wider text-muted-foreground">Next scheduled feeding</div>
+              <div className="num mt-2 text-3xl font-extrabold">{nextFeeding ? nextFeeding.time : "—"}</div>
+              <div className="mt-3 text-xs text-muted-foreground">Countdown</div>
+              <div className="num mt-1 text-3xl font-bold tabular-nums" aria-label="Time remaining until next scheduled feeding">{nextFeeding ? formatCountdown(nextFeeding.remainingMs) : "—"}</div>
+              {nextFeeding && <p className="mt-1 text-xs text-muted-foreground">{nextFeeding.tomorrow ? "Tomorrow" : "Today"} · device local time</p>}
+              <div className="mt-4 text-xs uppercase tracking-wider text-muted-foreground">Assigned feed compartment</div>
+              <div className="mt-2 flex items-center gap-2">
+                {assignedCompartment === 1 || assignedCompartment === 2 ? <>
+                  <span className={`inline-block h-3 w-3 rounded-full ${assignedCompartment === 1 ? "bg-orange-500" : "bg-green-500"}`} aria-hidden="true" />
+                  <span className={`font-semibold ${assignedCompartment === 1 ? "text-orange-600 dark:text-orange-400" : "text-green-600 dark:text-green-400"}`}>Compartment {assignedCompartment}</span>
+                </> : <span className="text-sm text-muted-foreground">Not assigned</span>}
+              </div>
+              {planError && <p className="mt-2 text-xs text-destructive">Feeding plan unavailable: {planError}</p>}
+              {!planError && !nextFeeding && <p className="mt-2 text-xs text-muted-foreground">No valid feeding times configured.</p>}
+              <p className="mt-4 text-xs text-muted-foreground">Schedule preview only. Automatic dispensing remains locked until hardware safety tests pass.</p>
             </div>
           </div>
-          <div className="mt-4 grid gap-2 sm:grid-cols-2">
-            {SERVO_COMPARTMENTS.map(group => <Stat key={group.name} label={group.name} value={`PCA9685: ${group.channels.join(", ")}`} />)}
-          </div>
-          <p className="mt-2 text-xs text-muted-foreground">See Feeding for individual servo channels. Legacy gate states are not mapped to the new compartments.</p>
         </Card>
         <Card>
           <CardTitle icon={<Cpu className="h-4 w-4" />} right={<Link to="/environment" className="text-xs font-semibold text-primary">Environment →</Link>}>Devices</CardTitle>
@@ -162,4 +173,32 @@ function Stat({ label, value, icon }: { label: string; value: string; icon?: Rea
 }
 function Device({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
   return <div className="rounded-xl border bg-surface p-3 text-center"><div className="flex justify-center">{icon}</div><div className="mt-1 text-xs font-semibold">{label}</div><div className="mt-1 text-xs text-muted-foreground">{value}</div></div>;
+}
+
+/** Finds the next configured HH:mm slot in the browser's local time zone. */
+function getNextFeeding(times: string[] | undefined, nowMs: number): { time: string; remainingMs: number; tomorrow: boolean } | null {
+  if (!Array.isArray(times)) return null;
+  const now = new Date(nowMs);
+  const candidates = times.flatMap(time => {
+    const match = /^(\d{1,2}):(\d{2})$/.exec(time);
+    if (!match) return [];
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    if (hour > 23 || minute > 59) return [];
+    const next = new Date(now);
+    next.setHours(hour, minute, 0, 0);
+    if (next.getTime() <= nowMs) next.setDate(next.getDate() + 1);
+    return [{ time: `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`, nextMs: next.getTime() }];
+  });
+  candidates.sort((a, b) => a.nextMs - b.nextMs);
+  const next = candidates[0];
+  if (!next) return null;
+  return { time: next.time, remainingMs: Math.max(0, next.nextMs - nowMs), tomorrow: new Date(next.nextMs).getDate() !== now.getDate() || new Date(next.nextMs).getMonth() !== now.getMonth() };
+}
+function formatCountdown(ms: number): string {
+  const seconds = Math.max(0, Math.ceil(ms / 1000));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainder = seconds % 60;
+  return [hours, minutes, remainder].map(n => String(n).padStart(2, "0")).join(":");
 }
