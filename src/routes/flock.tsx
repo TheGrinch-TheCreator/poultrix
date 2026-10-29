@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { Card, CardTitle, PageHeader, Pill, StageBadge } from "@/components/poultrix/ui";
 import { API_URL, useAI, useHardware, stageName } from "@/lib/live-hardware";
 import type { Stage } from "@/lib/demo-data";
-import { getMyFarm, saveMyFarm } from "@/lib/farm-store";
+import { getMyFarm } from "@/lib/farm-store";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/flock")({
@@ -15,23 +15,29 @@ export const Route = createFileRoute("/flock")({
 });
 
 function FlockPage() {
-  const [birdCount, setBirdCount] = useState("");
-  const [saved, setSaved] = useState(false);
+  const [birdCount, setBirdCount] = useState<number | null>(null);
   useEffect(() => {
-    try {
-      getMyFarm().then(f => { if (f) setBirdCount(String(f.bird_count)); }).catch(console.error);
-    } catch { /* storage unavailable */ }
+    let active = true;
+    const refresh = async () => {
+      try {
+        const response = await fetch(`${API_URL}/api/feeding/config`, { cache: "no-store" });
+        if (!response.ok) throw new Error("Feeding configuration unavailable");
+        const config = await response.json();
+        const count = Number(config.birdCount);
+        if (active && Number.isInteger(count) && count > 0) setBirdCount(count);
+      } catch {
+        try {
+          const farm = await getMyFarm();
+          if (active && farm) setBirdCount(farm.bird_count);
+        } catch { /* retain last confirmed value */ }
+      }
+    };
+    void refresh();
+    const timer = setInterval(() => void refresh(), 5000);
+    window.addEventListener("poultrix:feeding-updated", refresh);
+    return () => { active = false; clearInterval(timer); window.removeEventListener("poultrix:feeding-updated", refresh); };
   }, []);
-  const validBirds = /^\d+$/.test(birdCount) && Number(birdCount) > 0;
-  async function saveFeedingSetup() {
-    if (!validBirds) return;
-    try {
-      const farm = await getMyFarm();
-      if (!farm) throw new Error("Farm not found");
-      await saveMyFarm({ name: farm.name, location: farm.location, bird_count: Number(birdCount) });
-      setSaved(true);
-    } catch (error) { setSaved(false); toast.error(error instanceof Error ? error.message : "Could not save bird count"); }
-  }
+  const validBirds = birdCount !== null && Number.isInteger(birdCount) && birdCount > 0;
   const { data: hardware, error: hardwareError } = useHardware();
   const { data: ai } = useAI();
   const cameraReady = hardware?.camera?.connected === true;
@@ -48,7 +54,7 @@ function FlockPage() {
   const allowance = stage ? allowances[stage] : null;
   // The confirmed Arduino stage is the only source of the feeding allowance.
   // Changing bird count scales the flock target, never the per-bird requirement.
-  const dailyFlockGrams = validBirds && allowance ? Number(birdCount) * allowance.dailyGrams : null;
+  const dailyFlockGrams = validBirds && allowance ? birdCount! * allowance.dailyGrams : null;
   const totalGrams = dailyFlockGrams !== null && allowance ? dailyFlockGrams / allowance.sessions : null;
 
   return (
@@ -77,7 +83,7 @@ function FlockPage() {
           <CardTitle>Batch overview</CardTitle>
           <div className="grid grid-cols-2 gap-4">
             {[
-              ["Birds", validBirds ? birdCount : "—"],
+              ["Birds", validBirds ? String(birdCount) : "—"],
               ["AI confidence", confidence],
               ["Connection", hardware?.connected ? "Online" : "—"],
               ["Last checked", ai?.lastInference ? new Date(ai.lastInference).toLocaleString() : "—"],
