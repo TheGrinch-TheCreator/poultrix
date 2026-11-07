@@ -1,3 +1,6 @@
+# RETIRED 2026-11-07: the telemetry Worker was deleted and poultrix-telemetry.service
+# is disabled. Live data now goes through the authenticated /api/pi/* gateway.
+# See telemetry-worker/RETIRED.md.
 
 #!/usr/bin/env python3
 import json

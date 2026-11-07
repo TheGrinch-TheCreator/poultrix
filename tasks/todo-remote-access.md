@@ -127,11 +127,13 @@ Checks: tsc 2 errors fewer; lint unchanged; build ✅. The WebRTC preview (`127.
 **Files:** `raspberry-pi/app.py` · **Scope:** S · **Depends on:** R-B
 
 ## R8: Retire the telemetry mirror
+**Status (2026-11-07): done.** `poultrix-telemetry.service` stopped and disabled (poultrix + cloudflared unaffected). Worker `telemetry-worker` deleted (the repo config named it `poultrix-telemetry`, which never existed); its `/api/status` now returns 404. The code is kept and marked retired (`telemetry-worker/RETIRED.md`, uploader header).
+
 **Description:** `sudo systemctl disable --now poultrix-telemetry`; delete the `telemetry-worker` Worker (`npx wrangler delete --name telemetry-worker`). Keep `telemetry-worker/` and the uploader in git, marked retired in their READMEs, or remove them (owner's choice at that point).
 
 **Acceptance:**
-- [ ] `https://telemetry-worker.johnkarlduenas.workers.dev/api/status` no longer serves data
-- [ ] The service is inactive on the Pi
+- [x] `https://telemetry-worker.johnkarlduenas.workers.dev/api/status` no longer serves data
+- [x] The service is inactive on the Pi
 
 **Scope:** S · **Depends on:** R7
 
