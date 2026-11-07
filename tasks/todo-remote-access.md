@@ -107,13 +107,15 @@ Checks: tsc 2 errors fewer; lint unchanged; build ✅. The WebRTC preview (`127.
 **Files:** `src/lib/live-hardware.ts`, `.env.local` (local only) · **Scope:** S · **Depends on:** R4, R5
 
 ### Checkpoint R-B (owner, phone on mobile data)
-- [ ] Dashboard live within 10 s
-- [ ] Supervised short manual feed works
-- [ ] Bypass login + Resume work
-- [ ] Camera visible on the AI page
-- [ ] A non-allowlisted account sees "Account not approved"
+- [x] Dashboard live within 10 s (owner, mobile data, 2026-11-07)
+- [x] Supervised short manual feed works (owner, mobile data, 2026-11-07)
+- [x] Bypass login + Resume work (owner, mobile data, 2026-11-07)
+- [x] Camera visible on the AI page (owner, mobile data, 2026-11-07)
+- [ ] A non-allowlisted account sees "Account not approved" (not reported; covered by the local gateway test)
 
 ## R7: Lock the Pi down
+**Status (2026-11-07):** implemented. `host="127.0.0.1"`, `CORS(app)` + `flask_cors` import removed, `flask-cors` dropped from `requirements-rpi.txt`. Before the change, the Pi journal showed no non-local clients of :5000 in 30 min (only the tunnel and the uploader, both on 127.0.0.1). Off-Pi smoke tests still pass; no CORS header returned.
+
 **Description:** `app.run(host="127.0.0.1")`; remove `CORS(app)` and the `flask_cors` import. Back up first. Restart.
 
 **Acceptance:**

@@ -1,6 +1,5 @@
 from flask import Flask, jsonify, request, Response
 import os, secrets, random
-from flask_cors import CORS
 from picamera2 import Picamera2
 from ultralytics import YOLO
 
@@ -19,7 +18,8 @@ from datetime import datetime, timezone
 # ============================================================
 
 app = Flask(__name__)
-CORS(app)
+# No CORS: browsers never call Flask directly. All access goes through the
+# authenticated Cloudflare Worker gateway via the tunnel (SPEC-remote-access).
 
 
 def request_user():
@@ -3370,8 +3370,11 @@ if __name__ == "__main__":
         "on port 5000"
     )
 
+    # Localhost only: cloudflared (VPC service -> 127.0.0.1:5000) and the
+    # telemetry uploader connect locally. Nothing on the LAN can reach the
+    # unauthenticated control API directly.
     app.run(
-        host="0.0.0.0",
+        host="127.0.0.1",
         port=5000,
         debug=False,
         threaded=True,
