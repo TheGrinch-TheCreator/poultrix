@@ -30,7 +30,7 @@ Spec: `SPEC-remote-access.md` · Plan: `tasks/plan-remote-access.md`
 
 **Acceptance:**
 - [x] no token → 401; unapproved or unconfirmed → 403; unlisted → 404; wrong method → 405; >4 KB → 413 (local 28/28; live 401/404/405)
-- [ ] approved token → `/api/pi/snapshot` 200 with live data
+- [x] approved token → `/api/pi/snapshot` 200 with live data (owner's browser 2026-11-07 20:44:47 and 20:45:15; Pi log shows `GET /api/snapshot` 200 via the tunnel)
 - [x] no request path or query value can change the upstream host or path (local 28/28; live 401/404/405)
 
 **Verify:** tsc (no new errors), lint, build, deploy, curl matrix with a real token.
@@ -38,9 +38,11 @@ Spec: `SPEC-remote-access.md` · Plan: `tasks/plan-remote-access.md`
 **Depends on:** R1 (snapshot)
 
 ### Checkpoint R-A
-- [ ] Curl matrix passes against the deployed Worker; the current site still works on the LAN
+- [x] Curl matrix passes against the deployed Worker; the current site still works on the LAN (2026-11-07; live 403 for a non-approved account not yet tried, covered by the local test)
 
 ## R3: Browser Pi client + shared snapshot store
+**Status (2026-11-07):** implemented, **not deployed**. `src/lib/pi-client.ts` (`piFetch`/`piJson`, 401 → refresh + retry, `PiError` codes), `src/lib/pi-snapshot.ts` (shared 5 s poller, paused when hidden). `useHardware`/`useAI`/`useLiveAlerts` read from it. Alert acknowledgements sync every 60 s instead of every 3 s. The header pill shows Not approved / Signed out, with a banner for unapproved accounts. tsc one error fewer; build ✅. Note: AI-cycle progress now refreshes every 5 s (was 1 s).
+
 **Description:**
 - `src/lib/pi-client.ts`: `piFetch(path, init)` → same-origin `/api/pi/...` with the Supabase bearer; one refresh-and-retry on 401; typed errors for 401/403/429/5xx.
 - A shared snapshot store polls every 5 s while visible.

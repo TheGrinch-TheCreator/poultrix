@@ -1,17 +1,18 @@
 import { useEffect, useState } from "react";
-import { API_URL } from "@/lib/live-hardware";
 import { supabase } from "@/integrations/supabase/client";
+import { piErrorMessage, type PiError } from "@/lib/pi-client";
+import { usePiSnapshot } from "@/lib/pi-snapshot";
 
 export type LiveAlert = { id: string; severity: "critical" | "warning" | "info"; title: string; description: string; action: string };
-type Snapshot = { health: any; status: any; ai: any; weight: any; feeding: any; errors: Record<string,string> };
+type Snapshot = { health: any; status: any; ai: any; weight: any; feeding: any; errors: Record<string,string>; gatewayError?: PiError | null };
 
-const POLL_MS = 3000;
+// Live data comes from the shared snapshot poller; acknowledgements are
+// synced separately and much less often (Worker request budget).
+const ACK_POLL_MS = 60_000;
 const listeners = new Set<() => void>();
-let snapshot: Snapshot | null = null;
 let lastSuccessful = false;
 let subscribers = 0;
 let timer: ReturnType<typeof setInterval> | undefined;
-let inFlight = false;
 let acknowledgements: Record<string, boolean> = {};
 let ackError: string | null = null;
 async function syncAcks() {
@@ -44,35 +45,6 @@ async function mutateAck(id: string, method: 'POST' | 'DELETE') {
   emit();
 }
 function emit() { listeners.forEach(fn => fn()); }
-async function fetchJson(path: string) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 2500);
-  try {
-    const r = await fetch(`${API_URL}${path}`, { cache: "no-store", signal: controller.signal });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return await r.json();
-  } finally { clearTimeout(timeout); }
-}
-async function refresh() {
-  if (inFlight) return;
-  inFlight = true;
-  const endpoints = { health: "/api/system/health", status: "/api/status", ai: "/api/ai/status", weight: "/api/feeding/weight", feeding: "/api/feeding/status" } as const;
-  const entries = Object.entries(endpoints);
-  try {
-    const results = await Promise.allSettled(entries.map(([, path]) => fetchJson(path)));
-    const next: Snapshot = { health: null, status: null, ai: null, weight: null, feeding: null, errors: {} };
-    results.forEach((result, i) => {
-      const key = entries[i][0] as keyof Omit<Snapshot, "errors">;
-      if (result.status === "fulfilled") next[key] = result.value;
-      else next.errors[key] = result.reason instanceof Error ? result.reason.message : "Unavailable";
-    });
-    const accessible = !!next.status || !!next.health;
-    if (accessible) lastSuccessful = true;
-    snapshot = next;
-    await syncAcks();
-    emit();
-  } finally { inFlight = false; }
-}
 function add(out: LiveAlert[], id: string, severity: LiveAlert["severity"], title: string, description: string, action: string) {
   if (!out.some(a => a.id === id)) out.push({ id, severity, title, description, action });
 }
@@ -80,7 +52,10 @@ function deriveAlerts(s: Snapshot | null): LiveAlert[] {
   if (!s) return [];
   const out: LiveAlert[] = [];
   if (!s.status && !s.health) {
-    add(out, "api-unreachable", "critical", "Raspberry Pi API unavailable", "Cannot retrieve live system status. Other readings cannot be verified.", "Check the Pi, Flask service, network, and API URL.");
+    const code = s.gatewayError?.code;
+    if (code === "NOT_APPROVED") add(out, "account-not-approved", "warning", "Account not approved", "This account can't read Poultrix live data or control hardware.", "Ask the farm owner to add your email to the approved list.");
+    else if (code === "AUTH_REQUIRED" || code === "SESSION_INVALID") add(out, "session-expired", "warning", "Signed out", "Live data needs a signed-in session.", "Sign in again.");
+    else add(out, "api-unreachable", "critical", "Raspberry Pi API unavailable", `Cannot retrieve live system status (${piErrorMessage(s.gatewayError)}). Other readings cannot be verified.`, "Check the farm internet connection, the Pi, and the poultrix and cloudflared services.");
     return out;
   }
   if (s.health) {
@@ -122,14 +97,19 @@ function deriveAlerts(s: Snapshot | null): LiveAlert[] {
 export async function acknowledgeLiveAlert(id: string) { await mutateAck(id, 'POST'); }
 export async function restoreLiveAlert(id: string) { await mutateAck(id, 'DELETE'); }
 export function useLiveAlerts() {
+  const { snapshot: pi, error } = usePiSnapshot();
   const [revision, setRevision] = useState(0);
   useEffect(() => {
     const notify = () => setRevision(v => v + 1);
     listeners.add(notify); subscribers++;
-    if (subscribers === 1) { void refresh(); timer = setInterval(() => void refresh(), POLL_MS); }
+    if (subscribers === 1) { void syncAcks(); timer = setInterval(() => void syncAcks(), ACK_POLL_MS); }
     return () => { listeners.delete(notify); subscribers--; if (subscribers === 0) { clearInterval(timer); timer = undefined; } };
   }, []);
   void revision;
+  if (pi) lastSuccessful = true;
+  const snapshot: Snapshot | null = pi
+    ? { health: pi.health, status: pi.status, ai: pi.ai, weight: pi.weight, feeding: pi.feedingStatus, errors: pi.errors ?? {} }
+    : error ? { health: null, status: null, ai: null, weight: null, feeding: null, errors: {}, gatewayError: error } : null;
   const all = deriveAlerts(snapshot);
   return { alerts: all.filter(a => !acknowledgements[a.id]), acknowledged: all.filter(a => !!acknowledgements[a.id]), count: all.filter(a => !acknowledgements[a.id]).length, loading: !snapshot, lastSuccessful, ackError };
 }

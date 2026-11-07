@@ -1,15 +1,21 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { piErrorMessage, piFetch } from "@/lib/pi-client";
+import { refreshSnapshot, usePiSnapshot } from "@/lib/pi-snapshot";
+/** @deprecated Direct LAN URL; removed in remote-access R6. Use piFetch(). */
 export const API_URL = (import.meta.env.VITE_POULTRIX_API_URL || "http://192.168.1.48:5000").replace(/\/$/, "");
 export type Hardware = { connected?: boolean; arduinoOnline?: boolean; piSeenByArduino?: boolean|null; operatingStatus?: string; mode?: string; stage?: string; temperature?: number|null; humidity?: number|null; lightRaw?: number|null; fansOn?: number; heatersOn?: number; led?: boolean; temperatureTarget?: {min:number;max:number}; camera?: {connected?:boolean}; ai?: AI };
 export type AI = { detectedStage?:string|null; confidence?:number|null; lastInference?:string|null; status?:string; confident?:boolean; error?:string|null; confirmationCount?:number; consecutiveCount?:number; votes?:Record<string,number>; cycleRunning?:boolean; framesAnalyzed?:number; failedFrames?:number; transitionStatus?:string; transitionConfirmations?:number; transitionRequired?:number; hardwareTransitionStatus?:string; hardwareTransitionError?:string|null; lastTransitionResult?:{status:string;from:string;to:string;timestamp?:string}|null };
+// Live data comes from the shared snapshot poller (one /api/pi/snapshot
+// request per 5 s through the authenticated Worker gateway).
 export function useHardware() {
- const [data,setData]=useState<Hardware|null>(null); const [error,setError]=useState<string|null>(null);
- useEffect(()=>{let active=true; const load=async()=>{try {const r=await fetch(`${API_URL}/api/status`,{cache:"no-store"}); if(!r.ok)throw Error(`HTTP ${r.status}`);const d=await r.json();if(active){setData(d);setError(null)}}catch(e){if(active){setData(null);setError(e instanceof Error?e.message:"Connection failed")}}};void load();const id=setInterval(load,3000);return()=>{active=false;clearInterval(id)}},[]);
- return {data,error};
+ const { snapshot, error } = usePiSnapshot();
+ return { data: snapshot?.status ?? null, error: error ? piErrorMessage(error) : null, errorCode: error?.code ?? null };
 }
-export function useAI() {const [data,setData]=useState<AI|null>(null);const [error,setError]=useState<string|null>(null);const [busy,setBusy]=useState(false);
- useEffect(()=>{let active=true;const load=async()=>{try{const r=await fetch(`${API_URL}/api/ai/status`,{cache:"no-store"});if(!r.ok)throw Error(`HTTP ${r.status}`);const d=await r.json();if(active){setData(d);setError(null)}}catch(e){if(active){setData(null);setError(e instanceof Error?e.message:"Connection failed")}}};void load();const id=setInterval(load,1000);return()=>{active=false;clearInterval(id)}},[]);
- const classify=async()=>{setBusy(true);try{const r=await fetch(`${API_URL}/api/ai/classify`,{method:"POST"});if(!r.ok)throw Error(`HTTP ${r.status}`);setError(null)}catch(e){setError(e instanceof Error?e.message:"Analysis failed")}finally{setBusy(false)}};
- return {data,error,busy,classify};}
+export function useAI() {
+ const { snapshot, error } = usePiSnapshot();
+ const [busy,setBusy]=useState(false); const [actionError,setActionError]=useState<string|null>(null);
+ const classify=async()=>{setBusy(true);try{await piFetch("/ai/classify",{method:"POST"});setActionError(null);await refreshSnapshot()}catch(e){setActionError(piErrorMessage(e))}finally{setBusy(false)}};
+ return { data: snapshot?.ai ?? null, error: actionError ?? (error ? piErrorMessage(error) : null), busy, classify };
+}
 export const display=(v:number|null|undefined,unit="")=>typeof v==="number"&&Number.isFinite(v)?`${v.toFixed(1)}${unit}`:"—";
 export const stageName=(v?:string|null)=>v&&["STARTER","GROWER","FINISHER"].includes(v.toUpperCase())?v.charAt(0).toUpperCase()+v.slice(1).toLowerCase():null;

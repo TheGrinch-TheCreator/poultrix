@@ -14,8 +14,10 @@ import { useHardware, type Hardware } from "@/lib/live-hardware";
 type SystemLink = { label: string; title: string; dot: string };
 
 /** Pi reachable + Arduino connected + Arduino sees the Pi heartbeat = Online. */
-function systemLink(hardware: Hardware | null, error: string | null): SystemLink {
+function systemLink(hardware: Hardware | null, error: string | null, code: string | null): SystemLink {
   if (!hardware) {
+    if (code === "NOT_APPROVED") return { label: "Not approved", title: "This account isn't approved for Poultrix", dot: "bg-amber-500" };
+    if (code === "AUTH_REQUIRED" || code === "SESSION_INVALID") return { label: "Signed out", title: "Sign in again to see live data", dot: "bg-amber-500" };
     return error
       ? { label: "Pi offline", title: `Raspberry Pi unreachable (${error})`, dot: "bg-red-500" }
       : { label: "Checking…", title: "Contacting the Raspberry Pi", dot: "bg-muted-foreground" };
@@ -68,8 +70,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { count: active } = useLiveAlerts();
   const { profile, avatarUrl } = useProfile();
   // Read-only status: Poultrix is always automatic, there is no mode to switch.
-  const { data: hardware, error: hardwareError } = useHardware();
-  const link = systemLink(hardware, hardwareError);
+  const { data: hardware, error: hardwareError, errorCode } = useHardware();
+  const link = systemLink(hardware, hardwareError, errorCode);
   const [savedFarm, setSavedFarm] = useState<PoultrixFarm | null>(null);
   useEffect(() => { let mounted=true; const refresh=()=>{getMyFarm().then(f=>{if(mounted)setSavedFarm(f);}).catch(console.error);};refresh();window.addEventListener("poultrix:farm-updated",refresh);return()=>{mounted=false;window.removeEventListener("poultrix:farm-updated",refresh);};},[]);
 
@@ -147,6 +149,11 @@ export function AppShell({ children }: { children: ReactNode }) {
             </div>
           </div>
         </header>
+        {errorCode === "NOT_APPROVED" && (
+          <div role="alert" className="border-b bg-amber-50 px-4 py-2 text-center text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-100">
+            Account not approved. Ask the farm owner to add your email before you can see live data or control hardware.
+          </div>
+        )}
         <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">{children}</main>
       </div>
 
