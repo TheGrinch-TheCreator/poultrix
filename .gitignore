@@ -36,3 +36,5 @@ dist-ssr
 !.env.example
 node_modules/
 .wrangler/
+
+__pycache__/

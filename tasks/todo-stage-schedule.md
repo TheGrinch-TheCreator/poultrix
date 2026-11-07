@@ -17,6 +17,8 @@ S1 stage_schedule.py + unit tests ── S2 app.py wiring ── Pi deploy ─�
 - **Old behaviour removed** (5-minute cycles all day, any-direction transitions): this is the intended change. The AI Stage page text changes with it.
 
 ## S1: Schedule logic and unit tests
+**Status (2026-11-08): done.** `raspberry-pi/stage_schedule.py` + `tests/stage-schedule/test_stage_schedule.py`: 19 tests pass (`npm run test:stage-schedule`). Written test-first (red: module missing, then green). Falls back to a fixed UTC+8 zone when the OS has no tz database (Windows dev machines); the Pi uses the real `Asia/Manila` zone.
+
 **Description:** new `raspberry-pi/stage_schedule.py`, no hardware imports.
 - Constants: `GROWER_FROM_DAY = 11`, `FINISHER_FROM_DAY = 25`, `DAILY_CHECK_TIME = "10:00"`, `DAILY_MAX_CYCLES = 6`, `TZ = Asia/Manila`.
 - `batch_day(start, today)`: `None` for no date or a future date.
@@ -27,7 +29,7 @@ S1 stage_schedule.py + unit tests ── S2 app.py wiring ── Pi deploy ─�
 - `load_attempt(path)` / `save_attempt(path, attempt)`: JSON with an atomic write; a corrupt file counts as "no attempt".
 
 **Acceptance:**
-- [ ] Tests for:
+- [x] Tests for:
   - day 10/11 and 24/25 gates;
   - forward-only rules (Grower → no Starter, Finisher → nothing);
   - Starter on day 26 → Grower and Finisher allowed;
@@ -38,8 +40,8 @@ S1 stage_schedule.py + unit tests ── S2 app.py wiring ── Pi deploy ─�
   - confirmed attempt not re-run;
   - next day re-run;
   - corrupt attempt file;
-  - `overdueDays` (day 11 not overdue before the first check, day 12 after a failed check → 1).
-- [ ] `python -m unittest discover -s tests/stage-schedule -v` passes.
+  - `overdueDays` (day 11 before the first check → 0, day 11 after a failed check → 1, day 12 before its check → 1).
+- [x] `python -m unittest discover -s tests/stage-schedule -v` passes (19/19).
 
 **Files:** `raspberry-pi/stage_schedule.py`, `tests/stage-schedule/test_stage_schedule.py` · **Scope:** S
 

@@ -11,6 +11,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "test:gateway": "node tests/pi-gateway/run.mjs",
+    "test:stage-schedule": "python -m unittest discover -s tests/stage-schedule -v",
     "build:maintenance": "vite build --config maintenance-site/vite.config.ts",
     "deploy:maintenance": "npm run build:maintenance && npx wrangler deploy -c maintenance-site/wrangler.jsonc"
   },

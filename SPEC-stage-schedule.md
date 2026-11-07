@@ -83,14 +83,17 @@ When the owner saves a batch start date **that differs from the saved one** and 
 ```json
 "schedule": {
   "batchStartDate": "2026-11-01", "batchDay": 8,
-  "phase": "starter" | "grower_check" | "finisher_check" | "complete" | "no_batch_date",
-  "allowedTargets": ["GROWER"],
-  "nextCheckAt": "2026-11-11T10:00:00+08:00",
-  "overdueDays": 0,
+  "phase": "no_batch_date" | "stage_unknown" | "starter" | "grower_check" | "grower" | "finisher_check" | "complete",
+  "currentStage": "STARTER", "allowedTargets": ["GROWER"],
+  "fromDay": {"STARTER": 1, "GROWER": 11, "FINISHER": 25}, "checkTime": "10:00", "maxCyclesPerDay": 6,
+  "windowOpen": false, "nextCheckAt": "2026-11-11T10:00:00+08:00",
+  "overdueDays": 0, "overdueStage": null,
   "lastAttempt": {"date": "2026-11-10", "cycles": 6, "result": "not_confirmed",
                   "detectedStage": "STARTER", "confidence": 72.4}
 }
 ```
+- `phase`: `grower` = in Grower, waiting for day 25; `stage_unknown` = the Arduino hasn't reported a stage.
+- `overdueDays` = days past the gate day without a confirmation, counting today only after today's check has failed (day 11 after a failed check → 1, day 12 before its check → 1). `overdueStage` = the stage being waited for.
 - The frontend shows these values and never recomputes the day gates. The 11/25 constants live only on the Pi.
 - Both `/api/ai/status` and `/api/snapshot` are already gateway routes, so the gateway tables don't change.
 
