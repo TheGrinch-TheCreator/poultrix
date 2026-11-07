@@ -2,6 +2,7 @@ import "./lib/error-capture";
 
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
+import { handlePiGateway, PI_GATEWAY_PREFIX, type PiGatewayEnv } from "./lib/server/pi-gateway";
 
 type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;
@@ -91,8 +92,13 @@ async function handlePoultrixHistory(request: Request, env: HistoryEnv): Promise
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     try {
-      if (new URL(request.url).pathname === "/api/history") {
+      const pathname = new URL(request.url).pathname;
+      if (pathname === "/api/history") {
         return await handlePoultrixHistory(request, env as HistoryEnv);
+      }
+      // Authenticated, allowlisted gateway to the Pi (SPEC-remote-access.md).
+      if (pathname.startsWith(`${PI_GATEWAY_PREFIX}/`)) {
+        return await handlePiGateway(request, env as PiGatewayEnv);
       }
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);

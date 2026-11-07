@@ -20,6 +20,8 @@ Spec: `SPEC-remote-access.md` · Plan: `tasks/plan-remote-access.md`
 **Files:** `raspberry-pi/app.py` · **Scope:** M
 
 ## R2: Worker allowlist route with auth
+**Status (2026-11-07):** implemented as `src/lib/server/pi-gateway.ts`, dispatched from `src/server.ts` (like `/api/history`; keeps the camera stream out of the SSR handler) instead of a `routes/api/pi/$.ts` file. tsc no new errors, build ✅, local Node test 28/28 ✅ (real ES256 tokens; mocked Supabase + Pi). Pi JSON errors pass through unchanged so the UI keeps its messages.
+
 **Description:**
 - `src/lib/server/pi-auth.ts`: ES256 JWKS verification (cached), claims check, confirmed email, `POULTRIX_ALLOWED_EMAILS` match.
 - `src/routes/api/pi/$.ts`: an allowlist table (spec "Allowlist") mapping `/api/pi/<x>` → `http://127.0.0.1:5000/api/<x>` via `POULTRIX_HISTORY`. It handles method checks, a 4 KB body limit, forwards `X-Poultrix-Maintenance` only for bypass routes, sets `X-Poultrix-User`, streams the camera, takes `?access_token=` for the camera only, and uses timeouts (5 s reads, 15 s control).
