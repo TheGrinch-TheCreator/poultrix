@@ -143,19 +143,24 @@ function RootComponent() {
         const { data, error } = await withTimeout(supabase.auth.getSession(), "Authentication");
         if (error) throw error;
         if (!alive) return;
+        // Every branch ends by showing the page. Redirecting and then returning
+        // early left "Checking your account…" up until a manual refresh
+        // (signed-out/incognito visits, logout, login).
         if (!data.session) {
           accountVerifiedThisPage = false;
-          if (pathRef.current !== "/login") { await router.navigate({ to: "/login", replace: true }); return; }
+          if (pathRef.current !== "/login") await router.navigate({ to: "/login", replace: true });
         } else {
           const farm = await withTimeout(getMyFarm(), "Farm lookup");
           if (!alive) return;
-          if (!farm && pathRef.current !== "/farm-setup") { await router.navigate({ to: "/farm-setup", replace: true }); return; }
-          if (farm && (pathRef.current === "/login" || pathRef.current === "/farm-setup")) { await router.navigate({ to: "/", replace: true }); return; }
+          if (!farm) {
+            accountVerifiedThisPage = false;
+            if (pathRef.current !== "/farm-setup") await router.navigate({ to: "/farm-setup", replace: true });
+          } else {
+            accountVerifiedThisPage = true;
+            if (pathRef.current === "/login" || pathRef.current === "/farm-setup") await router.navigate({ to: "/", replace: true });
+          }
         }
-        if (alive) {
-          accountVerifiedThisPage = true;
-          setGuard("ready");
-        }
+        if (alive) setGuard("ready");
       } catch (err) {
         console.error("Poultrix account check failed:", err);
         if (alive) {
@@ -167,14 +172,19 @@ function RootComponent() {
     return () => { alive = false; };
   }, [attempt, router]);
 
+  // Leaving /login or /farm-setup for an app page before the account was
+  // verified (e.g. right after sign-in or farm registration): check again.
+  const firstBareRender = useRef(true);
+  useEffect(() => {
+    if (firstBareRender.current) { firstBareRender.current = false; return; }
+    if (!bare && !accountVerifiedThisPage) setAttempt((n) => n + 1);
+  }, [bare]);
+
   useEffect(() => {
     const { data } = supabase.auth.onAuthStateChange((event) => {
       if (event !== "SIGNED_IN" && event !== "SIGNED_OUT" && event !== "USER_UPDATED") return;
       // Do not query Supabase from within the auth callback: it can deadlock token refresh.
-      if (event === "SIGNED_OUT") {
-        accountVerifiedThisPage = false;
-        setGuard("checking");
-      }
+      if (event === "SIGNED_OUT") accountVerifiedThisPage = false;
       router.invalidate();
       setAttempt((n) => n + 1);
       if (event !== "SIGNED_OUT") queryClient.invalidateQueries();
