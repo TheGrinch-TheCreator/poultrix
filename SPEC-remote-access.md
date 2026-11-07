@@ -3,7 +3,7 @@
 Status: **APPROVED 2026-11-07** by the owner (Q1 → b, Q2–Q4 → yes, Q5 → free plan). Module `remote-access` in `CAPABILITY_MAP.md`.
 
 ## Objective
-Signed-in, approved users can use the whole Poultrix app from anywhere, including a phone on mobile data, at `https://poultrix.johnkarlduenas.workers.dev`. That covers live data, feeding, AI stage and bypass. The Pi's control API stops being reachable without a login.
+Signed-in, approved users can use the whole Poultrix app from anywhere, including a phone on mobile data, at `https://poultrix.johnkarlduenas.workers.dev` (moved 2026-11-07 to `https://app.poultrix.workers.dev`). That covers live data, feeding, AI stage and bypass. The Pi's control API stops being reachable without a login.
 
 Today:
 - The browser calls the Pi directly at `http://192.168.1.48:5000`. That only works on the farm Wi-Fi, and is blocked from the HTTPS site (mixed content).
