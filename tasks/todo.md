@@ -77,7 +77,7 @@ Deploy order: **firmware (Phase 1) must be flashed before the Pi change (Phase 2
 ## Checkpoint A: Firmware done
 - [x] Bench procedure `tasks/bench-test-always-live.md` completed by the owner, results recorded (Pi and mains disconnected). 2026-11-07, commit `ed46ebb4`
 - [x] T2–T4 bench tests pass; IDE Verify clean (all gating rows ✅; G8 no reset)
-- [ ] Flashed to the house Arduino **with the current, unchanged Pi code running**: dashboard shows LIVE; feeding/AI still work; no stuck state after unplugging/replugging USB
+- [x] Flashed to the house Arduino **with the current, unchanged Pi code running**: dashboard shows LIVE; feeding/AI still work; no stuck state after unplugging/replugging USB (2026-11-07; feeding not exercised)
 - [ ] Results in `TEST_RESULTS` (bench results recorded 2026-11-07; house-flash results pending); owner reviews before Phase 2
 
 ---
@@ -95,12 +95,12 @@ Deploy order: **firmware (Phase 1) must be flashed before the Pi change (Phase 2
 
 **Acceptance criteria:**
 - [x] `grep -n "recovery_" raspberry-pi/app.py` returns only the alias route
-- [ ] `POST /api/mode/safe` and `/api/mode/live` → 410
-- [ ] After USB unplug/replug, `/api/status` shows `connected:true` and `operatingStatus:"LIVE"` with no user action
+- [x] `POST /api/mode/safe` and `/api/mode/live` → 410 (2026-11-07, on the Pi)
+- [x] After USB unplug/replug, `/api/status` shows `connected:true` and `operatingStatus:"LIVE"` with no user action (2026-11-07, on the Pi)
 
 **Verification:**
 - [x] `python -c "import ast;ast.parse(open('raspberry-pi/app.py',encoding='utf-8').read())"`
-- [ ] On the Pi: curl `/api/status`, `/api/recovery/status`, `POST /api/mode/safe`
+- [x] On the Pi: curl `/api/status`, `/api/recovery/status`, `POST /api/mode/safe` (2026-11-07, on the Pi)
 
 **Dependencies:** Checkpoint A · **Files:** `raspberry-pi/app.py` · **Scope:** M
 
@@ -115,22 +115,22 @@ Deploy order: **firmware (Phase 1) must be flashed before the Pi change (Phase 2
 - Readiness checks in `feeding_dispense`, `_feed_inputs`, `_feed_job_run`, `simulation_start_analysis` and `apply_confirmed_stage_to_arduino` use `connected and arduinoOnline` instead of `mode == "live"`. Feeding is refused while the Arduino reports `PI_STATUS:OFFLINE`.
 
 **Acceptance criteria:**
-- [ ] Unplug/replug USB during bypass → `/api/bypass/status` (same token) returns 200 with `manualControlsPaused:true`; Resume returns 200 and manual relays work again
-- [ ] The Arduino is in automatic control during the gap (from T4 timeout)
+- [x] Unplug/replug USB during bypass → `/api/bypass/status` (same token) returns 200 with `manualControlsPaused:true`; Resume returns 200 and manual relays work again (2026-11-07, on the Pi)
+- [x] The Arduino is in automatic control during the gap (from T4 timeout) (2026-11-07, on the Pi)
 - [ ] Manual feeding works when connected; refused when disconnected
 
 **Verification:**
 - [x] AST parse check
-- [ ] On the Pi: log in to bypass, unplug USB 20 s, replug, call status/resume with the same token
+- [x] On the Pi: log in to bypass, unplug USB 20 s, replug, call status/resume with the same token (2026-11-07, on the Pi)
 
 **Dependencies:** T5 · **Files:** `raspberry-pi/app.py` · **Scope:** S
 
 ---
 
 ## Checkpoint B: Pi + Arduino integrated
-- [ ] Stop `app.py` 60 s → the Arduino keeps controlling (heater/fan react), LCD `Pi: OFFLINE`; restart → online with no user action
+- [ ] Stop `app.py` 60 s → the Arduino keeps controlling (heater/fan react), LCD `Pi: OFFLINE`; restart → online with no user action — **restart part ✅ 2026-11-07** (LIVE in 12 s); control-during-gap needs owner eyes on LCD/relays
 - [ ] Cold boot of both devices → automatic control, dashboard Online
-- [ ] Repeat T1's bypass routine → no stuck state
+- [x] Repeat T1's bypass routine → no stuck state (2026-11-07, on the Pi)
 - [ ] Results in `TEST_RESULTS`; owner reviews
 
 ---
