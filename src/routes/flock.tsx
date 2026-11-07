@@ -1,7 +1,7 @@
 import { FeedingPlanner } from "@/components/poultrix/FeedingPlanner";
 import { createFileRoute } from "@tanstack/react-router";
 import { Camera } from "lucide-react";
-import { FlockWebRTCPreview } from "@/components/poultrix/FlockWebRTCPreview";
+import { FlockCameraPreview } from "@/components/poultrix/FlockCameraPreview";
 import { useEffect, useState } from "react";
 import { Card, CardTitle, PageHeader, Pill, StageBadge } from "@/components/poultrix/ui";
 import { useAI, useHardware, stageName } from "@/lib/live-hardware";
@@ -70,14 +70,14 @@ function FlockPage() {
       <div className="grid gap-5 lg:grid-cols-2">
         <Card className="overflow-hidden p-0">
           <div className="relative aspect-video bg-black">
-            <FlockWebRTCPreview />
+            <FlockCameraPreview cameraReady={cameraReady} />
             <div className="absolute left-3 top-3 flex items-center gap-2 rounded-full bg-card/90 px-3 py-1 text-xs font-semibold">
               <Camera className="h-4 w-4" />
               {cameraReady ? "Live flock camera" : "Camera offline"}
             </div>
           </div>
           <p className="p-4 text-xs text-muted-foreground">
-            Raspberry Pi Camera V3 · WebRTC local preview (SSH tunnel required)
+            Raspberry Pi Camera V3 · same live stream as AI Stage (works on mobile data)
           </p>
         </Card>
         <Card>
