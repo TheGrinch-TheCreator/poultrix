@@ -16,9 +16,9 @@ Frontend (repo root, npm):
 - `npm run build` — production build to `dist/` (client + `dist/server/server.js` for the Cloudflare Worker)
 - `npm run lint` — ESLint; `npm run format` — Prettier
 
-There is no test suite. Verify changes with `npm run build` and `npm run lint`.
+There is no app test suite. Verify changes with `npm run build` and `npm run lint`. The Pi gateway has Node tests: `npm run test:gateway` (`tests/pi-gateway/`, real ES256 tokens, mocked Pi); run them after any change to `pi-gateway.ts`.
 
-Deploy the app Worker: `npm run build && npx wrangler deploy` (rollback: `npx wrangler versions list`, then `npx wrangler rollback <version-id>`). `telemetry-worker/` is retired (see its `RETIRED.md`); don't redeploy it.
+Deploy the app Worker: `npm run build && npx wrangler deploy`. Deploy the maintenance Worker: `npm run deploy:maintenance` (builds `maintenance-site/` with `npm run build:maintenance`, then `npx wrangler deploy -c maintenance-site/wrangler.jsonc`). Rollback either: `npx wrangler versions list [-c maintenance-site/wrangler.jsonc]`, then `npx wrangler rollback <version-id>`. `telemetry-worker/` is retired (see its `RETIRED.md`); don't redeploy it.
 
 Raspberry Pi backend: `python3 raspberry-pi/app.py` runs on the Pi only (needs `picamera2`, a serial-attached Arduino, and `ultralytics`/YOLO with `best.pt`). It can't run on a dev machine. Flask listens on **127.0.0.1:5000 only**, so smoke-test on the Pi itself: `curl http://127.0.0.1:5000/api/snapshot` (or `/api/status`, `/api/system/health`, `/api/ai/status`). Service: `poultrix.service` (`/home/raspberry/poultrix-api`, logs `journalctl -u poultrix`). Back up `app.py` before replacing it.
 
@@ -43,12 +43,16 @@ browser ──HTTPS──▶ Worker /api/pi/* (Supabase JWT + approved email + a
 2. **Raspberry Pi Flask API** (`raspberry-pi/app.py`, one large file). It owns the serial link and runs background threads: serial reader, heartbeat, camera, AI cycle, system health, simulation, and bypass watchdog. There is no SAFE/LIVE recovery system: `/api/mode/*` return 410, and `/api/recovery/status` is a short compatibility alias. `/api/status` reports `operatingStatus` (LIVE = connected, fresh telemetry, healthy), `arduinoOnline` and `piSeenByArduino`. Feeding and AI stage-apply require the controller to be online, healthy and seeing the Pi. YOLOv8 classification runs as vote-based AI cycles. A stage change (between any pair of stages) is sent to the Arduino after `AI_TRANSITION_CONFIRMATIONS_REQUIRED` (3) consecutive confident cycles. `/api/ai/acknowledge-finisher` is obsolete and returns 409. `/api/snapshot` returns status, AI, weight, health and feeding gates in one call (for the 5 s remote poll). Bypass login is limited to 5 failures / 10 min per user (429). State-changing requests are logged as `[AUDIT]` with the user from `X-Poultrix-User`, trusted only from localhost (the tunnel). Flask has **no CORS** and binds `127.0.0.1`. The `/api/test/*` routes were removed. Feeding plans come from per-stage constants (`FEED_FIXED_DAILY_GRAMS`, `FEED_SESSIONS`, `FEED_RATES`) and are saved to `feeding_config.json` / `feed_inventory.json`. The `/api/bypass/*` routes are a secret-protected maintenance/test console (`POULTRIX_BYPASS_SECRET`) with an 8 h session. A serial loss pauses the session (keeps the token, sets `manualControlsPaused` and `connectionLostAt`); `/api/bypass/resume` re-sends `BYPASS:ON`.
 3. **Cloudflare Workers**
    - The main app (`wrangler.jsonc`, Worker `app` at `https://app.poultrix.workers.dev`; account subdomain `poultrix`) serves the SSR build. All Pi access uses the private `POULTRIX_HISTORY` VPC service binding (target `127.0.0.1:5000` via the tunnel).
-   - **Pi gateway** `src/lib/server/pi-gateway.ts`, dispatched from `src/server.ts` for `/api/pi/*`:
-     - **Auth:** verifies the Supabase ES256 access token locally (JWKS cached), then checks a confirmed email against `POULTRIX_ALLOWED_EMAILS`. 401 = signed out, 403 `NOT_APPROVED`.
-     - **Allowlist:** an explicit `ROUTES` table maps each `/api/pi/<x>` to a fixed Pi path. Unlisted → 404, wrong method → 405. No query strings are forwarded, and bodies are limited to 4 KB (413).
-     - **Bypass routes:** also forward `X-Poultrix-Maintenance`.
-     - **Camera:** `/api/pi/camera/stream` streams MJPEG and is the only route that accepts `?access_token=`.
-     - **Errors:** the Pi's JSON errors are passed through.
+   - **Pi gateway** `src/lib/server/pi-gateway.ts`: `createPiGateway({ routes, auth })` builds one handler per Worker from the explicit `ROUTES` table. Unlisted → 404, wrong method → 405. No query strings are forwarded, bodies are limited to 4 KB (413), and the Pi's JSON errors are passed through.
+     - **Main app** (`handlePiGateway`, dispatched from `src/server.ts` for `/api/pi/*`): `APP_ROUTES` (22, **no bypass routes**), `auth: "supabase"`. It verifies the Supabase ES256 access token locally (JWKS cached), then a confirmed email in `POULTRIX_ALLOWED_EMAILS`. 401 = signed out, 403 `NOT_APPROVED`. The camera (`/api/pi/camera/stream`, MJPEG) is the only route that accepts `?access_token=`.
+     - **Maintenance site** (`handleMaintenanceGateway`): `MAINTENANCE_ROUTES` (11: `bypass/*`, `camera/stream`, `snapshot`), `auth: "maintenance"`, **no app login** (owner decision, accepted risk AD-21).
+       - The Pi checks the bypass password (5 failures / 10 min per client IP) and the `X-Poultrix-Maintenance` token.
+       - The Worker serves camera (`?maintenance_token=`) and snapshot only after validating the token with the Pi's `/api/bypass/status` (cached 30 s).
+       - Every request carries `X-Poultrix-User: ip:<CF-Connecting-IP>`.
+   - **Maintenance Worker** `maintenance` (`maintenance-site/`, https://maintenance.poultrix.workers.dev):
+     - `worker.ts` sends `/api/pi/*` to the maintenance gateway and serves the console from assets with security headers.
+     - The console (`maintenance-site/src/Console.tsx`, Vite + React, `@/` aliased to `src/`) is the only bypass UI: unlock, live camera, status strip, relays, gate groups, sensor/stage tests, Return to automatic, Resume, Exit.
+     - Same VPC service binding as the main app. The main app has **no** bypass page or link.
    - **Rule:** add a Pi route by adding a table entry; never forward arbitrary paths or methods, and never build the upstream URL from the request.
    - Other server routes: `src/server.ts` also handles `/api/history` itself (Supabase check, fixed upstream path), and `src/routes/api/alerts/acknowledgements.ts` syncs alert acknowledgements.
    - The telemetry mirror (`telemetry-worker/`, `poultrix_telemetry_uploader.py`) is **retired**: the Worker was deleted and the uploader disabled.

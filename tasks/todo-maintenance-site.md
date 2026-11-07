@@ -76,6 +76,8 @@ M1 gateway refactor (two tables, two auth modes) ── M2 maintenance Worker + 
 **Files:** `src/routes/bypass.tsx` (delete), `src/routes/settings.tsx`, `src/routes/profile.tsx`, `src/lib/server/pi-gateway.ts` · **Scope:** S · **Depends on:** M-A
 
 ## M4: Docs
+**Status (2026-11-07): done.** CLAUDE.md (two gateway instances, maintenance Worker, deploy/rollback, `npm run test:gateway`); Obsidian `BYPASS_MODE`, `API_REFERENCE`, `SYSTEM_ARCHITECTURE`, `FRONTEND`, `DEPLOYMENT`, `COMMANDS`, `CURRENT_STATUS`, `KNOWN_ISSUES`, `TODO`, AD-13 updated; `CAPABILITY_MAP` → done. Old Worker `poultrix` deleted (`poultrix.poultrix.workers.dev` → 404).
+
 CLAUDE.md (second Worker, two auth modes, deploy commands), Obsidian (`BYPASS_MODE`, `API_REFERENCE`, `SYSTEM_ARCHITECTURE`, `FRONTEND`, `DEPLOYMENT`, `COMMANDS`, `CURRENT_STATUS`, `CHANGELOG`, `TEST_RESULTS`), `CAPABILITY_MAP` → done. `graphify update .`
 
 ## Risks
