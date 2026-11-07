@@ -3,7 +3,7 @@
 Spec: `SPEC-remote-access.md` · Plan: `tasks/plan-remote-access.md`
 
 ## R1: Pi backend additions (backward compatible)
-**Status (2026-11-07):** implemented. AST ✅, pyflakes no new warnings, off-Pi smoke test 13/13 ✅ (T5/T6 regression still passes). LAN callers can't spoof `X-Poultrix-User` (trusted only from localhost = tunnel).
+**Status (2026-11-07):** implemented. AST ✅, pyflakes no new warnings, off-Pi smoke test 13/13 ✅ (T5/T6 regression still passes). **Deployed to the Pi 2026-11-07 20:31** (sha `45919fab`, backup `app_backup_before_r1_20261107_203123.py`): snapshot OK (3.7 KB, no part errors), `/api/test/stage` → 404, rate limit 403×5 → 429. LAN callers can't spoof `X-Poultrix-User` (trusted only from localhost = tunnel).
 
 **Description:** In `raspberry-pi/app.py`:
 - Add `GET /api/snapshot` → `{status, ai, weight, health, feedingStatus}`, built from the same functions as the existing routes.
@@ -12,9 +12,9 @@ Spec: `SPEC-remote-access.md` · Plan: `tasks/plan-remote-access.md`
 - Remove `/api/test/*` routes.
 
 **Acceptance:**
-- [x] `/api/snapshot` returns all five parts; existing routes unchanged (off-Pi)
-- [x] 6th failed bypass login within 10 min → 429 (off-Pi)
-- [x] `grep -n "/api/test/" raspberry-pi/app.py` → nothing (off-Pi)
+- [x] `/api/snapshot` returns all five parts; existing routes unchanged (off-Pi + on Pi)
+- [x] 6th failed bypass login within 10 min → 429 (off-Pi + on Pi)
+- [x] `grep -n "/api/test/" raspberry-pi/app.py` → nothing (off-Pi + on Pi)
 
 **Verify:** `py_compile`; off-Pi smoke test (stubbed); deploy to the Pi with a backup; curl on the Pi.
 **Files:** `raspberry-pi/app.py` · **Scope:** M
