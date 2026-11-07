@@ -21,6 +21,7 @@ Spec: `SPEC-remote-access.md` · Plan: `tasks/plan-remote-access.md`
 
 ## R2: Worker allowlist route with auth
 **Status (2026-11-07):** implemented as `src/lib/server/pi-gateway.ts`, dispatched from `src/server.ts` (like `/api/history`; keeps the camera stream out of the SSR handler) instead of a `routes/api/pi/$.ts` file. tsc no new errors, build ✅, local Node test 28/28 ✅ (real ES256 tokens; mocked Supabase + Pi). Pi JSON errors pass through unchanged so the UI keeps its messages.
+**Deployed 2026-11-07** (Worker version `b0bf0e2f`, from `d0a5e05d`; previous `40d9deb0`). Secret `POULTRIX_ALLOWED_EMAILS` = owner's address. Live: no token → 401, fake token → 401 (JWKS reachable), unlisted/removed paths → 404, wrong method → 405, site + `/api/history` unaffected. **Still needed: an approved real session → 200 snapshot via the tunnel, and a non-approved account → 403.**
 
 **Description:**
 - `src/lib/server/pi-auth.ts`: ES256 JWKS verification (cached), claims check, confirmed email, `POULTRIX_ALLOWED_EMAILS` match.
@@ -28,9 +29,9 @@ Spec: `SPEC-remote-access.md` · Plan: `tasks/plan-remote-access.md`
 - Set the `POULTRIX_ALLOWED_EMAILS` secret (**owner provides the emails**).
 
 **Acceptance:**
-- [ ] no token → 401; unapproved or unconfirmed → 403; unlisted → 404; wrong method → 405; >4 KB → 413
+- [x] no token → 401; unapproved or unconfirmed → 403; unlisted → 404; wrong method → 405; >4 KB → 413 (local 28/28; live 401/404/405)
 - [ ] approved token → `/api/pi/snapshot` 200 with live data
-- [ ] no request path or query value can change the upstream host or path
+- [x] no request path or query value can change the upstream host or path (local 28/28; live 401/404/405)
 
 **Verify:** tsc (no new errors), lint, build, deploy, curl matrix with a real token.
 **Files:** `src/lib/server/pi-auth.ts`, `src/routes/api/pi/$.ts`, `wrangler.jsonc` (if needed) · **Scope:** M
