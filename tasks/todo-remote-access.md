@@ -138,6 +138,8 @@ Checks: tsc 2 errors fewer; lint unchanged; build ✅. The WebRTC preview (`127.
 **Scope:** S · **Depends on:** R7
 
 ## R9: Docs
+**Status (2026-11-07): done.** CLAUDE.md updated (architecture diagram, gateway rules, env/secrets, Flask localhost rule, request budget, deploy/rollback). 15 vault notes updated; AD-18/19/20 added; AD-12 retired. `graphify update .` run.
+
 **Description:** CLAUDE.md (architecture: browser → Worker → tunnel; no direct Pi calls; the env var removed; the allowlist rule), Obsidian (`SYSTEM_ARCHITECTURE`, `API_REFERENCE`, `FRONTEND`, `BACKEND`, `DEPLOYMENT`, `KNOWN_ISSUES` (CORS/unauth/mixed content resolved), `ARCHITECTURE_DECISIONS` (new AD for the Worker gateway + allowlist auth; AD-12 retired), `CURRENT_STATUS`, `CHANGELOG`, `TEST_RESULTS`). `graphify update .`
 
 **Scope:** M (docs) · **Depends on:** R8
