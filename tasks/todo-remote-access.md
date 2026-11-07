@@ -56,7 +56,7 @@ Spec: `SPEC-remote-access.md` · Plan: `tasks/plan-remote-access.md`
 **Files:** `src/lib/pi-client.ts`, `src/lib/live-hardware.ts`, `src/lib/live-weights.ts`, `src/lib/live-alerts.ts` · **Scope:** M · **Depends on:** R-A
 
 ## R4: Pages and components use the adapters
-**Status (2026-11-07):** implemented, not deployed. New `src/lib/live-endpoints.ts`:
+**Status (2026-11-07):** deployed (`14410c5b`). New `src/lib/live-endpoints.ts`:
 - `usePiEndpoint`: snapshot parts, otherwise a slow poll.
 - `usePiResource`: visible-only poll.
 - `useCameraStreamUrl`: tokenized MJPEG URL, cleared while hidden, renewed every 45 min.
@@ -96,12 +96,13 @@ Checks: tsc 2 errors fewer; lint unchanged; build ✅. The WebRTC preview (`127.
 
 ## R6: Remove the direct Pi URL; deploy
 **Status (2026-11-07):** `API_URL` removed from `live-hardware.ts`; `VITE_POULTRIX_API_URL` removed from `.env.local`. Clean build: no `192.168` in `dist/`. tsc 18 → 15 errors (none new).
+**Deployed 2026-11-07** with R4 and R5: Worker `14410c5b` (rollback: `npx wrangler rollback a8c6e9f3-8a72-45db-b6da-9fa20611a785`). Live bundle: no `192.168`, Supabase config present; pages 200; gateway without a token → 401.
 
 **Description:** Remove `API_URL` / `VITE_POULTRIX_API_URL` from `live-hardware.ts` and `.env.local`. Build, check the bundle has no `192.168.`, deploy.
 
 **Acceptance:**
 - [x] `grep -r "192.168" dist/client` → nothing
-- [ ] Deployed; the old version id is recorded for rollback
+- [x] Deployed; the old version id is recorded for rollback
 
 **Files:** `src/lib/live-hardware.ts`, `.env.local` (local only) · **Scope:** S · **Depends on:** R4, R5
 
