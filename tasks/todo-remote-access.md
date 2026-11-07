@@ -115,13 +115,14 @@ Checks: tsc 2 errors fewer; lint unchanged; build ✅. The WebRTC preview (`127.
 
 ## R7: Lock the Pi down
 **Status (2026-11-07):** implemented. `host="127.0.0.1"`, `CORS(app)` + `flask_cors` import removed, `flask-cors` dropped from `requirements-rpi.txt`. Before the change, the Pi journal showed no non-local clients of :5000 in 30 min (only the tunnel and the uploader, both on 127.0.0.1). Off-Pi smoke tests still pass; no CORS header returned.
+**Deployed to the Pi 2026-11-07 21:32** (sha `6a5368d9`, backup `app_backup_before_r7_20261107_213230.py`): listening `127.0.0.1:5000` only; PC → `192.168.1.48:5000` refused; localhost 200; LIVE; no tracebacks. Tunnel traffic continued right after the restart (snapshot, camera stream, feeding config, alert acks from the owner's open tab); the uploader delivered 10× (1 transient error during the restart).
 
 **Description:** `app.run(host="127.0.0.1")`; remove `CORS(app)` and the `flask_cors` import. Back up first. Restart.
 
 **Acceptance:**
-- [ ] From the PC: `curl http://192.168.1.48:5000/api/status` → connection refused
-- [ ] The app still works on the farm Wi-Fi and on mobile data (through the Worker)
-- [ ] `/api/history` still works
+- [x] From the PC: `curl http://192.168.1.48:5000/api/status` → connection refused (2026-11-07)
+- [x] The app still works on the farm Wi-Fi and on mobile data (through the Worker) (live tunnel traffic after the restart)
+- [ ] `/api/history` still works (not separately checked; same VPC binding)
 
 **Files:** `raspberry-pi/app.py` · **Scope:** S · **Depends on:** R-B
 
