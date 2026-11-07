@@ -49,8 +49,8 @@ M1 gateway refactor (two tables, two auth modes) ── M2 maintenance Worker + 
 - Root `package.json`: `build:maintenance`, `deploy:maintenance`.
 
 **Acceptance:**
-- [ ] `npm run build:maintenance` OK (✅); deploy creates `https://maintenance.poultrix.workers.dev`
-- [ ] Live: camera/snapshot without a token → 401; unlisted path → 404; wrong password → 403 and the 6th → 429
+- [x] `npm run build:maintenance` OK; deploy created `https://maintenance.poultrix.workers.dev` (Worker `a4f615f6`, 2026-11-07)
+- [x] Live: camera/snapshot without or with a bad token → 401; `feeding/*`, `status`, other `/api/*` → 404; a bad token reaches the Pi → 403 (tunnel OK); headers `x-frame-options: DENY`, `no-referrer`, HTML `no-store`. (Wrong-password 429 not re-tested live; same Pi limit verified in remote-access R1)
 
 **Files:** `maintenance-site/*` (new), `package.json` · **Scope:** M · **Depends on:** M1
 
