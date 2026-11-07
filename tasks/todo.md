@@ -75,10 +75,10 @@ Deploy order: **firmware (Phase 1) must be flashed before the Pi change (Phase 2
 ---
 
 ## Checkpoint A: Firmware done
-- [ ] Bench procedure `tasks/bench-test-always-live.md` completed by the owner, results recorded (Pi and mains disconnected)
-- [ ] T2–T4 bench tests pass; IDE Verify clean
+- [x] Bench procedure `tasks/bench-test-always-live.md` completed by the owner, results recorded (Pi and mains disconnected). 2026-11-07, commit `ed46ebb4`
+- [x] T2–T4 bench tests pass; IDE Verify clean (all gating rows ✅; G8 no reset)
 - [ ] Flashed to the house Arduino **with the current, unchanged Pi code running**: dashboard shows LIVE; feeding/AI still work; no stuck state after unplugging/replugging USB
-- [ ] Results in `TEST_RESULTS`; owner reviews before Phase 2
+- [ ] Results in `TEST_RESULTS` (bench results recorded 2026-11-07; house-flash results pending); owner reviews before Phase 2
 
 ---
 

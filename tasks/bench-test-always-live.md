@@ -55,7 +55,7 @@ Spec: `SPEC-always-live.md` · Tasks: T2–T4 in `tasks/todo.md` · Gate: **Chec
 ## 4. Sensors
 | ID | Step | Expected | Actual | Result |
 |---|---|---|---|---|
-| N1 | Read `TEMPERATURE:` / `HUMIDITY:` from 3 status blocks | Within ±2 °C of the room thermometer; humidity plausible (30–95%) | |✅|
+| N1 | Read `TEMPERATURE:` / `HUMIDITY:` from 3 status blocks | Within ±2 °C of the room thermometer; humidity plausible (30–95%) | n1 29.2  thermometer is 29.2|✅|
 | N2 | Send `SENSOR:CHECK` | `SENSOR_CHECK:OK` plus four `SENSOR_*` lines (works without any mode) | |✅|
 | N3 | Cover the LDR with the cup for 6 s, read `LIGHT_RAW:` / `LUX:` | Lux drops (expect < 50) | raw 12 lux 21.3 |✅|
 | N4 | Shine the torch on the LDR | Lux rises (expect > 50) | raw 178 lux 1002 |✅ |
