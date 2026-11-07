@@ -102,13 +102,13 @@ function deriveAlerts(s: Snapshot | null): LiveAlert[] {
   const hw = s.status;
   if (hw?.connected === false && s.health?.arduino !== false) add(out,"arduino-disconnected","critical","Arduino disconnected","The hardware status endpoint reports a disconnected Arduino.","Check the Arduino USB connection.");
   if (hw?.connected && String(hw.mode || "").toLowerCase() === "live") {
-    if (hw.temperature == null || hw.humidity == null) add(out,"dht22-no-reading","warning","DHT22 readings unavailable","LIVE mode is enabled, but temperature or humidity is missing.","Inspect DHT22 wiring and Arduino serial readings.");
+    if (hw.temperature == null || hw.humidity == null) add(out,"dht22-no-reading","warning","DHT22 readings unavailable","The Arduino is connected, but temperature or humidity is missing.","Inspect DHT22 wiring and Arduino serial readings.");
     else if (Number.isFinite(Number(hw.temperature))) {
       const low = Number(hw.temperatureTarget?.min), high = Number(hw.temperatureTarget?.max), value = Number(hw.temperature);
       if (Number.isFinite(high) && value > high) add(out,"temperature-high","critical","Temperature above target",`${value.toFixed(1)} °C exceeds the configured ${high.toFixed(1)} °C maximum.`,"Check cooling fans, ventilation, and the temperature sensor.");
       if (Number.isFinite(low) && value < low) add(out,"temperature-low","warning","Temperature below target",`${value.toFixed(1)} °C is below the configured ${low.toFixed(1)} °C minimum.`,"Check the heater and temperature sensor.");
     }
-    if (hw.lightRaw == null) add(out,"ldr-no-reading","warning","LDR reading unavailable","LIVE mode is enabled, but no light sensor reading is reported.","Check the LDR wiring and Arduino output.");
+    if (hw.lightRaw == null) add(out,"ldr-no-reading","warning","LDR reading unavailable","The Arduino is connected, but no light sensor reading is reported.","Check the LDR wiring and Arduino output.");
   }
   if (s.ai?.error || s.ai?.status === "error") add(out,"ai-error","warning","AI classification error",String(s.ai.error || "The classifier reported an error."),"Inspect the camera feed and AI backend logs.");
   if (s.ai?.finisherAcknowledgementRequired || s.ai?.finisherTransitionPending) add(out,"finisher-ack","warning","Finisher stage needs acknowledgement","A confirmed transition is waiting for the farmer's refill acknowledgement.","Verify the correct Finisher feed is loaded, then acknowledge the transition in the AI Stage page.");

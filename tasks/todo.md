@@ -157,6 +157,8 @@ Deploy order: **firmware (Phase 1) must be flashed before the Pi change (Phase 2
 ---
 
 ## Task 8: Bypass page handles pause and Resume
+**Status (2026-11-07):** implemented, not committed. Also reworded "LIVE mode" copy in `index.tsx`, `hardware.tsx`, `environment.tsx`, `live-alerts.ts` (logic unchanged). tsc: one error fewer (bypass env access), lint: only pre-existing non-formatting issues, build ✅. **Manual LAN hiccup check not done.**
+
 **Description:** In `bypass.tsx`:
 - "Return to live" copy becomes "Return to automatic control"; remove "not confirmed LIVE" messages.
 - When status shows `manualControlsPaused` with `connectionLostAt`, show "Connection lost — manual control paused" and the existing Resume button.
@@ -164,7 +166,7 @@ Deploy order: **firmware (Phase 1) must be flashed before the Pi change (Phase 2
 
 **Acceptance criteria:**
 - [ ] After a USB hiccup the page shows the paused message, and Resume restores manual controls without logging in again
-- [ ] No "SAFE"/"LIVE mode" wording left on the page
+- [x] No "SAFE"/"LIVE mode" wording left on the page
 
 **Verification:**
 - [ ] lint / tsc / build as in T7
