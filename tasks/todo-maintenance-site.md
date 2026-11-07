@@ -11,6 +11,8 @@ M1 gateway refactor (two tables, two auth modes) ── M2 maintenance Worker + 
 ```
 
 ## M1: Gateway refactor
+**Status (2026-11-07): done.** `createPiGateway({routes, auth})`, `APP_ROUTES` (unchanged, still includes bypass until M3), `MAINTENANCE_ROUTES` (11 routes), exports `handlePiGateway` (main, Supabase) and `handleMaintenanceGateway` (bypass token; camera/snapshot token validated via the Pi's `/api/bypass/status`, cached 30 s, keyed by SHA-256 of the token). Tests are now in the repo: `npm run test:gateway` → app 28/28, maintenance 20/20. tsc no new errors; main build ✅. Main app behavior unchanged (not redeployed).
+
 **Description:** `src/lib/server/pi-gateway.ts` → `createPiGateway({ routes, auth: "supabase" | "maintenance" })`.
 - Split the table into `APP_ROUTES` (today's minus `bypass/*`, **kept until M3** so the old page keeps working) and `MAINTENANCE_ROUTES` (`bypass/*`, `camera/stream`, `snapshot`).
 - **Maintenance auth:**
@@ -21,8 +23,8 @@ M1 gateway refactor (two tables, two auth modes) ── M2 maintenance Worker + 
 - The main Worker's behavior is unchanged in M1.
 
 **Acceptance:**
-- [ ] The Node test (extended) passes for both modes: main 401/403/404/405/413/200 as before; maintenance camera/snapshot 401 without a token and 200 with a valid one, `feeding/*` 404, `ip:` user header set
-- [ ] tsc no new errors; main build OK
+- [x] The Node test (extended) passes for both modes: main 401/403/404/405/413/200 as before; maintenance camera/snapshot 401 without a token and 200 with a valid one, `feeding/*` 404, `ip:` user header set
+- [x] tsc no new errors; main build OK
 
 **Files:** `src/lib/server/pi-gateway.ts`, `src/server.ts` · **Scope:** M
 

@@ -72,7 +72,17 @@ const ROUTES: readonly PiRoute[] = [
   { path: "/camera/stream", upstream: "/api/camera/stream", methods: GET, stream: true },
 ];
 
-const ROUTE_BY_PATH = new Map(ROUTES.map((route) => [route.path, route]));
+/** Main app (Supabase login). Its bypass routes stay until maintenance-site M3. */
+export const APP_ROUTES: readonly PiRoute[] = ROUTES;
+/** Maintenance site (bypass password only; SPEC-maintenance-site.md). */
+export const MAINTENANCE_ROUTES: readonly PiRoute[] = ROUTES.filter(
+  (route) => route.maintenance || route.path === "/camera/stream" || route.path === "/snapshot",
+);
+
+/** "supabase": Supabase session + approved email (main app).
+ *  "maintenance": the Pi's bypass session; camera/snapshot need a token the
+ *  Worker has validated with the Pi (maintenance site, no app login). */
+export type GatewayAuth = "supabase" | "maintenance";
 const PI_ORIGIN = "http://127.0.0.1:5000"; // VPC service target (fixed)
 const MAX_BODY_BYTES = 4096;
 export const PI_GATEWAY_PREFIX = "/api/pi";
@@ -199,84 +209,148 @@ async function readBody(request: Request): Promise<string | Response> {
   return text;
 }
 
-export async function handlePiGateway(request: Request, env: PiGatewayEnv): Promise<Response> {
-  const url = new URL(request.url);
-  const route = ROUTE_BY_PATH.get(url.pathname.slice(PI_GATEWAY_PREFIX.length));
-  if (!route) return json({ error: "Not found" }, 404);
-  const method = request.method.toUpperCase();
-  if (!route.methods.includes(method as Method)) {
-    return json({ error: "Method not allowed" }, 405, { allow: route.methods.join(", ") });
-  }
+type Identity = { ok: true; user: string } | { ok: false; response: Response };
 
+async function supabaseIdentity(request: Request, url: URL, route: PiRoute, env: PiGatewayEnv): Promise<Identity> {
   const supabaseUrl = (env.SUPABASE_URL ?? process.env["SUPABASE_URL"] ?? "").replace(/\/$/, "");
   const apiKey = env.SUPABASE_PUBLISHABLE_KEY ?? process.env["SUPABASE_PUBLISHABLE_KEY"] ?? "";
   const allowed = allowedEmails(env);
-  if (!supabaseUrl || !apiKey || !env.POULTRIX_HISTORY || allowed.size === 0) {
-    return json({ error: "Remote access is not configured" }, 503);
+  if (!supabaseUrl || !apiKey || allowed.size === 0) {
+    return { ok: false, response: json({ error: "Remote access is not configured" }, 503) };
   }
-
   const bearer = /^Bearer\s+(.+)$/i.exec(request.headers.get("authorization") ?? "")?.[1];
   const token = bearer ?? (route.stream ? url.searchParams.get("access_token") : null);
-  if (!token) return json({ error: "Sign in required", code: "AUTH_REQUIRED" }, 401);
-
+  if (!token) return { ok: false, response: json({ error: "Sign in required", code: "AUTH_REQUIRED" }, 401) };
   let email: string | null;
   try {
     const claims = await verifyAccessToken(token, supabaseUrl);
-    if (!claims?.sub) return json({ error: "Session expired. Sign in again.", code: "SESSION_INVALID" }, 401);
+    if (!claims?.sub) return { ok: false, response: json({ error: "Session expired. Sign in again.", code: "SESSION_INVALID" }, 401) };
     email = await confirmedEmail(token, claims.sub, supabaseUrl, apiKey);
   } catch (error) {
     console.error("Pi gateway auth failed:", error);
-    return json({ error: "Unable to verify session" }, 503);
+    return { ok: false, response: json({ error: "Unable to verify session" }, 503) };
   }
   if (!email || !allowed.has(email)) {
-    return json({ error: "Account not approved for Poultrix", code: "NOT_APPROVED" }, 403);
+    return { ok: false, response: json({ error: "Account not approved for Poultrix", code: "NOT_APPROVED" }, 403) };
   }
-
-  const headers: Record<string, string> = { accept: route.stream ? "*/*" : "application/json", "x-poultrix-user": email };
-  let body: string | undefined;
-  if (method === "POST") {
-    const read = await readBody(request);
-    if (read instanceof Response) return read;
-    body = read;
-    headers["content-type"] = "application/json";
-  }
-  if (route.maintenance) {
-    const maintenance = request.headers.get("x-poultrix-maintenance");
-    if (maintenance && maintenance.length <= 200) headers["x-poultrix-maintenance"] = maintenance;
-  }
-
-  const timeoutMs = route.timeoutMs ?? (method === "GET" ? 10_000 : 20_000);
-  let upstream: Response;
-  try {
-    upstream = await env.POULTRIX_HISTORY.fetch(`${PI_ORIGIN}${route.upstream}`, {
-      method,
-      headers,
-      ...(body === undefined ? {} : { body }),
-      signal: route.stream ? request.signal : AbortSignal.timeout(timeoutMs),
-    });
-  } catch (error) {
-    console.error(`Pi gateway ${method} ${route.path} failed:`, error);
-    const timedOut = error instanceof Error && error.name === "TimeoutError";
-    return json({ error: timedOut ? "Raspberry Pi did not respond in time" : "Raspberry Pi unreachable", code: "PI_UNREACHABLE" }, timedOut ? 504 : 502);
-  }
-
-  if (route.stream) {
-    return new Response(upstream.body, {
-      status: upstream.status,
-      headers: {
-        "content-type": upstream.headers.get("content-type") ?? "application/octet-stream",
-        "cache-control": "no-store",
-        "x-content-type-options": "nosniff",
-      },
-    });
-  }
-  // Pass the Pi's own JSON status and message through (the UI shows them).
-  const contentType = upstream.headers.get("content-type") ?? "";
-  if (!contentType.includes("application/json")) {
-    return json({ error: "Raspberry Pi returned an unexpected response", code: "PI_BAD_RESPONSE" }, 502);
-  }
-  return new Response(await upstream.text(), {
-    status: upstream.status,
-    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" },
-  });
+  return { ok: true, user: email };
 }
+
+const MAINTENANCE_TOKEN_TTL_MS = 30_000;
+const validatedMaintenanceTokens = new Map<string, number>(); // sha256(token) -> valid until
+
+async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** True if the Pi accepts this bypass token (GET /api/bypass/status 200). */
+async function maintenanceTokenValid(token: string, user: string, pi: Fetcher): Promise<boolean> {
+  const key = await sha256Hex(token);
+  const until = validatedMaintenanceTokens.get(key);
+  if (until && until > Date.now()) return true;
+  const response = await pi.fetch(`${PI_ORIGIN}/api/bypass/status`, {
+    method: "GET",
+    headers: { accept: "application/json", "x-poultrix-maintenance": token, "x-poultrix-user": user },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!response.ok) {
+    validatedMaintenanceTokens.delete(key);
+    return false;
+  }
+  if (validatedMaintenanceTokens.size > 500) validatedMaintenanceTokens.clear();
+  validatedMaintenanceTokens.set(key, Date.now() + MAINTENANCE_TOKEN_TTL_MS);
+  return true;
+}
+
+async function maintenanceIdentity(request: Request, url: URL, route: PiRoute, pi: Fetcher): Promise<Identity> {
+  // The Pi rate-limits bypass login and audits actions per this identity.
+  const user = `ip:${(request.headers.get("cf-connecting-ip") ?? "unknown").slice(0, 64)}`;
+  // Bypass routes: the Pi itself checks the password (login) or the token.
+  if (route.maintenance) return { ok: true, user };
+  // Camera / snapshot: never open; require a bypass session the Pi confirms.
+  const token = request.headers.get("x-poultrix-maintenance") ?? (route.stream ? url.searchParams.get("maintenance_token") : null);
+  const required = { ok: false as const, response: json({ error: "Enter the bypass password first", code: "MAINTENANCE_REQUIRED" }, 401) };
+  if (!token || token.length > 200) return required;
+  try {
+    if (!(await maintenanceTokenValid(token, user, pi))) return required;
+  } catch (error) {
+    console.error("Maintenance token check failed:", error);
+    return { ok: false, response: json({ error: "Raspberry Pi unreachable", code: "PI_UNREACHABLE" }, 502) };
+  }
+  return { ok: true, user };
+}
+
+/** Build a gateway handler for one route table and auth mode. */
+export function createPiGateway(options: { routes: readonly PiRoute[]; auth: GatewayAuth }) {
+  const routeByPath = new Map(options.routes.map((route) => [route.path, route]));
+  return async function handle(request: Request, env: PiGatewayEnv): Promise<Response> {
+    const url = new URL(request.url);
+    const route = routeByPath.get(url.pathname.slice(PI_GATEWAY_PREFIX.length));
+    if (!route) return json({ error: "Not found" }, 404);
+    const method = request.method.toUpperCase();
+    if (!route.methods.includes(method as Method)) {
+      return json({ error: "Method not allowed" }, 405, { allow: route.methods.join(", ") });
+    }
+    const pi = env.POULTRIX_HISTORY;
+    if (!pi) return json({ error: "Remote access is not configured" }, 503);
+
+    const identity = options.auth === "supabase"
+      ? await supabaseIdentity(request, url, route, env)
+      : await maintenanceIdentity(request, url, route, pi);
+    if (!identity.ok) return identity.response;
+
+    const headers: Record<string, string> = { accept: route.stream ? "*/*" : "application/json", "x-poultrix-user": identity.user };
+    let body: string | undefined;
+    if (method === "POST") {
+      const read = await readBody(request);
+      if (read instanceof Response) return read;
+      body = read;
+      headers["content-type"] = "application/json";
+    }
+    if (route.maintenance) {
+      const maintenance = request.headers.get("x-poultrix-maintenance");
+      if (maintenance && maintenance.length <= 200) headers["x-poultrix-maintenance"] = maintenance;
+    }
+
+    const timeoutMs = route.timeoutMs ?? (method === "GET" ? 10_000 : 20_000);
+    let upstream: Response;
+    try {
+      upstream = await pi.fetch(`${PI_ORIGIN}${route.upstream}`, {
+        method,
+        headers,
+        ...(body === undefined ? {} : { body }),
+        signal: route.stream ? request.signal : AbortSignal.timeout(timeoutMs),
+      });
+    } catch (error) {
+      console.error(`Pi gateway ${method} ${route.path} failed:`, error);
+      const timedOut = error instanceof Error && error.name === "TimeoutError";
+      return json({ error: timedOut ? "Raspberry Pi did not respond in time" : "Raspberry Pi unreachable", code: "PI_UNREACHABLE" }, timedOut ? 504 : 502);
+    }
+
+    if (route.stream) {
+      return new Response(upstream.body, {
+        status: upstream.status,
+        headers: {
+          "content-type": upstream.headers.get("content-type") ?? "application/octet-stream",
+          "cache-control": "no-store",
+          "x-content-type-options": "nosniff",
+        },
+      });
+    }
+    // Pass the Pi's own JSON status and message through (the UI shows them).
+    const contentType = upstream.headers.get("content-type") ?? "";
+    if (!contentType.includes("application/json")) {
+      return json({ error: "Raspberry Pi returned an unexpected response", code: "PI_BAD_RESPONSE" }, 502);
+    }
+    return new Response(await upstream.text(), {
+      status: upstream.status,
+      headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" },
+    });
+  };
+}
+
+/** Main app gateway (Supabase login). */
+export const handlePiGateway = createPiGateway({ routes: APP_ROUTES, auth: "supabase" });
+/** Maintenance site gateway (bypass password only). */
+export const handleMaintenanceGateway = createPiGateway({ routes: MAINTENANCE_ROUTES, auth: "maintenance" });
