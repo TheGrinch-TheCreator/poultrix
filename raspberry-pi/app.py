@@ -21,6 +21,24 @@ from datetime import datetime, timezone
 app = Flask(__name__)
 CORS(app)
 
+
+def request_user():
+    """User reported by the Cloudflare Worker gateway (X-Poultrix-User).
+
+    Only trusted for requests arriving through the tunnel (cloudflared connects
+    from localhost). Direct LAN callers are identified by address instead."""
+    if request.remote_addr in ("127.0.0.1", "::1"):
+        user = request.headers.get("X-Poultrix-User", "").strip()
+        if user:
+            return user[:120]
+    return f"lan:{request.remote_addr}"
+
+
+@app.before_request
+def audit_state_changes():
+    if request.method in ("POST", "PUT", "DELETE") and request.path.startswith("/api/"):
+        print(f"[AUDIT] {request.method} {request.path} by {request_user()}", flush=True)
+
 ARDUINO_BAUD_RATE = 9600
 ARDUINO_RECONNECT_DELAY = 2
 # Require incoming serial data, not merely an open USB device.
@@ -1811,13 +1829,46 @@ def bypass_watchdog():
         if expired:bypass_shutdown()
         elif bypass_active():send_command("BYPASS:PING")
 
+BYPASS_LOGIN_MAX_FAILURES = 5
+BYPASS_LOGIN_WINDOW_SECONDS = 600
+bypass_login_failures = {}  # user -> deque of monotonic failure times
+bypass_login_lock = threading.Lock()
+
+
+def _bypass_failures(who, now):
+    entries = bypass_login_failures.setdefault(who, deque())
+    while entries and now - entries[0] > BYPASS_LOGIN_WINDOW_SECONDS:
+        entries.popleft()
+    return entries
+
+
+def bypass_login_blocked(who):
+    with bypass_login_lock:
+        return len(_bypass_failures(who, time.monotonic())) >= BYPASS_LOGIN_MAX_FAILURES
+
+
+def bypass_login_failed(who):
+    now = time.monotonic()
+    with bypass_login_lock:
+        _bypass_failures(who, now).append(now)
+        if len(bypass_login_failures) > 500:  # bound memory
+            for key in [k for k, v in bypass_login_failures.items() if not v][:250]:
+                del bypass_login_failures[key]
+
+
 @app.route("/api/bypass/login",methods=["POST"])
 def bypass_login():
     global bypass_token,bypass_expires,bypass_paused,bypass_connection_lost_at
     if not BYPASS_SECRET or len(BYPASS_SECRET)<4:
         return jsonify(error="Configure POULTRIX_BYPASS_SECRET (4+ characters) on the Pi"),503
+    who = request_user()
+    if bypass_login_blocked(who):
+        return jsonify(error="Too many failed attempts. Wait 10 minutes."),429
     value=str((request.get_json(silent=True) or {}).get("password", ""))
-    if not secrets.compare_digest(value,BYPASS_SECRET):return jsonify(error="Unauthorized"),403
+    if not secrets.compare_digest(value,BYPASS_SECRET):
+        bypass_login_failed(who)
+        print(f"[BYPASS] Failed login by {who}", flush=True)
+        return jsonify(error="Unauthorized"),403
     # Bypass authorization is separate from the operating mode.
     # Do not revoke the previously confirmed LIVE startup preference.
     if not bypass_send_confirmed("BYPASS:ON", "BYPASS_ACK:ON"):
@@ -2261,178 +2312,7 @@ def retired_mode_switch():
 
 
 # ============================================================
-# API: SIMULATED TEMPERATURE
-# ============================================================
-
-@app.route(
-    "/api/test/temperature",
-    methods=["POST"]
-)
-def set_test_temperature():
-
-    data = (
-        request.get_json(
-            silent=True
-        )
-        or {}
-    )
-
-    if "temperature" not in data:
-
-        return jsonify({
-            "success": False,
-            "error":
-                "Missing temperature"
-        }), 400
-
-    try:
-
-        temperature = float(
-            data["temperature"]
-        )
-
-    except (
-        ValueError,
-        TypeError
-    ):
-
-        return jsonify({
-            "success": False,
-            "error":
-                "Invalid temperature"
-        }), 400
-
-    if not send_command(
-        f"TEMP:{temperature}"
-    ):
-
-        return jsonify({
-            "success": False,
-            "error":
-                "Arduino not connected"
-        }), 503
-
-    return jsonify({
-        "success": True,
-        "temperature":
-            temperature
-    })
-
-
-# ============================================================
-# API: SIMULATED LUX
-# ============================================================
-
-@app.route(
-    "/api/test/lux",
-    methods=["POST"]
-)
-def set_test_lux():
-
-    data = (
-        request.get_json(
-            silent=True
-        )
-        or {}
-    )
-
-    if "lux" not in data:
-
-        return jsonify({
-            "success": False,
-            "error":
-                "Missing lux"
-        }), 400
-
-    try:
-
-        lux = float(
-            data["lux"]
-        )
-
-    except (
-        ValueError,
-        TypeError
-    ):
-
-        return jsonify({
-            "success": False,
-            "error":
-                "Invalid lux"
-        }), 400
-
-    if not send_command(
-        f"LUX:{lux}"
-    ):
-
-        return jsonify({
-            "success": False,
-            "error":
-                "Arduino not connected"
-        }), 503
-
-    return jsonify({
-        "success": True,
-        "lux": lux
-    })
-
-
-# ============================================================
-# API: MANUAL STAGE CONTROL
-# ============================================================
-
-@app.route(
-    "/api/test/stage",
-    methods=["POST"]
-)
-def set_stage():
-
-    data = (
-        request.get_json(
-            silent=True
-        )
-        or {}
-    )
-
-    stage = str(
-        data.get(
-            "stage",
-            ""
-        )
-    ).upper().strip()
-
-    valid_stages = (
-        "STARTER",
-        "GROWER",
-        "FINISHER"
-    )
-
-    if stage not in valid_stages:
-
-        return jsonify({
-            "success": False,
-            "error":
-                "Invalid stage"
-        }), 400
-
-    if not send_command(
-        f"STAGE:{stage}"
-    ):
-
-        return jsonify({
-            "success": False,
-            "error":
-                "Arduino not connected"
-        }), 503
-
-    return jsonify({
-        "success": True,
-        "stage": stage
-    })
-
-
-# ============================================================
-# API: CHECK LIVE SENSORS WHILE SAFE
+# API: SENSOR CHECK
 # ============================================================
 
 @app.route("/api/sensors/check/status", methods=["GET"])
@@ -2770,6 +2650,36 @@ def get_system_health():
         snapshot["issues"] = list(health_state["issues"])
     return jsonify(snapshot)
 
+
+
+def _view_json(view):
+    """Run an existing GET view and return (status_code, json body)."""
+    result = view()
+    status = 200
+    if isinstance(result, tuple):
+        result, status = result[0], result[1]
+    return status, result.get_json(silent=True)
+
+
+@app.route("/api/snapshot", methods=["GET"])
+def get_snapshot():
+    """Status, AI, weights, health and feeding gates in one response, so the
+    remote dashboard needs one request per poll (Workers request budget)."""
+    parts = {"status": get_status, "ai": get_ai_status, "weight": get_feeding_weight,
+             "health": get_system_health, "feedingStatus": feeding_status}
+    body, errors = {}, {}
+    for key, view in parts.items():
+        try:
+            code, data = _view_json(view)
+            body[key] = data
+            if code >= 400:
+                errors[key] = f"HTTP {code}"
+        except Exception as exc:  # one failing part must not hide the rest
+            body[key] = None
+            errors[key] = type(exc).__name__
+    body["errors"] = errors
+    body["generatedAt"] = utc_timestamp()
+    return jsonify(body)
 
 
 @app.route("/api/feeding/weight", methods=["GET"])
