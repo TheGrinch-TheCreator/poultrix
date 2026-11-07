@@ -11,6 +11,9 @@ import io
 import socket
 from collections import deque
 from datetime import datetime, timezone
+from pathlib import Path
+
+import stage_schedule
 
 
 # ============================================================
@@ -50,8 +53,12 @@ CAMERA_FPS = 15
 
 AI_MODEL_PATH = "best.pt"
 
-# Run automatic classification every 5 minutes.
+# Inside the daily stage-check window, run a cycle every 5 minutes
+# (stage_schedule.py: 10:00 Manila, at most 6 cycles, day-gated).
 AI_INTERVAL_SECONDS = 300
+# How often the AI worker checks whether the daily window is due.
+AI_SCHEDULE_POLL_SECONDS = 30
+STAGE_SCHEDULE_PATH = Path(__file__).with_name("stage_schedule.json")
 
 # Predictions below 60% are reported but not considered confident.
 AI_MIN_CONFIDENCE = 60.0
@@ -60,15 +67,10 @@ AI_MIN_CONFIDENCE = 60.0
 AI_CYCLE_DURATION_SECONDS = 30
 AI_SAMPLE_INTERVAL_SECONDS = 1.0
 
-# Require 3 consecutive valid AI cycles before a forward stage
-# transition is considered confirmed. Monitoring-only for now:
-# confirmed transitions are NOT sent to the Arduino.
+# Require 3 consecutive confident scheduled cycles agreeing on an allowed
+# (day-gated, forward-only) stage before it is sent to the Arduino.
 AI_TRANSITION_CONFIRMATIONS_REQUIRED = 3
 
-# Automatic hardware transition pilot:
-# Only STARTER -> GROWER is enabled for now.
-# GROWER -> FINISHER remains monitoring-only until refill acknowledgement
-# handling is implemented and tested.
 AI_AUTO_STAGE_TRANSITIONS = True
 AI_MIN_WINNING_VOTE_FRACTION = 0.60
 AI_MIN_VALID_FRAMES = 10
@@ -213,6 +215,11 @@ ai_state = {
 
 ai_state_lock = threading.Lock()
 ai_cycle_lock = threading.Lock()
+
+# Today's (or the last) daily stage-check attempt, persisted so a restart
+# never runs the window twice. See stage_schedule.py.
+schedule_lock = threading.Lock()
+schedule_attempt = stage_schedule.load_attempt(STAGE_SCHEDULE_PATH)
 
 ai_model = None
 
@@ -1233,20 +1240,48 @@ def apply_finisher_after_acknowledgement():
     return {"success": False, "status": "obsolete_endpoint_ai_transitions_are_validated_automatically"}
 
 
-def evaluate_stage_transition(detected_stage, confident):
-    """Any pair of stages can transition after three consecutive valid cycles."""
+def batch_start_date():
+    with feed_config_lock:
+        return _read_feed_config().get("batchStartDate")
+
+
+def current_schedule_status():
+    with state_lock:
+        current = state.get("stage")
+    with schedule_lock:
+        attempt = schedule_attempt
+    return stage_schedule.schedule_status(batch_start_date(), current, stage_schedule.local_now(), attempt)
+
+
+def evaluate_stage_transition(detected_stage, confident, scheduled=False):
+    """Day-gated, forward-only (SPEC-stage-schedule). Only scheduled cycles
+    count: a detection must be an allowed target for today's batch day, and
+    3 consecutive confident cycles must agree before the stage is applied."""
     with state_lock:
         current = str(state.get("stage") or "").strip().upper()
     detected = str(detected_stage or "").strip().upper()
-    valid = ("STARTER", "GROWER", "FINISHER")
+    valid = stage_schedule.STAGES
+    if not scheduled:
+        # Analyze now / maintenance analysis: camera check only. The scheduled
+        # candidate is left untouched.
+        return {"currentStage": current, "detectedStage": detected or None,
+                "confirmed": False, "status": "manual_check_only"}
+    day = stage_schedule.batch_day(batch_start_date(), stage_schedule.local_date(stage_schedule.local_now()))
+    allowed = stage_schedule.allowed_targets(day, current)
     with ai_state_lock:
         ai_state["finisherAcknowledgementRequired"] = False
         ai_state["finisherTransitionPending"] = False
         ai_state["finisherPendingSince"] = None
-        if not confident or detected not in valid or current not in valid:
+        if day is None:
+            status = "no_batch_date"
+        elif not confident or detected not in valid or current not in valid:
             status = "low_confidence_or_unknown"
         elif detected == current:
             status = "same_stage"
+        elif valid.index(detected) < valid.index(current):
+            status = "backward_ignored"
+        elif detected not in allowed:
+            status = "not_allowed_yet"
         else:
             status = None
         if status is not None:
@@ -1272,7 +1307,8 @@ def evaluate_stage_transition(detected_stage, confident):
                   "required": AI_TRANSITION_CONFIRMATIONS_REQUIRED,
                   "confirmed": ai_state["transitionConfirmed"],
                   "confirmedStage": ai_state["confirmedTransitionStage"],
-                  "status": ai_state["transitionStatus"]}
+                  "status": ai_state["transitionStatus"],
+                  "batchDay": day, "allowedTargets": list(allowed)}
     if result["confirmed"]:
         hardware = apply_confirmed_stage_to_arduino(detected)
         result["hardware"] = hardware
@@ -1281,7 +1317,7 @@ def evaluate_stage_transition(detected_stage, confident):
     return result
 
 
-def run_ai_cycle():
+def run_ai_cycle(scheduled=False):
     """
     Run a 30-second classification cycle.
 
@@ -1289,7 +1325,8 @@ def run_ai_cycle():
     most votes wins. Confidence is the average confidence of the frames that
     voted for the winning stage.
 
-    This remains monitoring-only: it does NOT send STAGE:* to the Arduino.
+    Only scheduled cycles (the daily window in ai_worker) can lead to a stage
+    change; manual cycles are camera checks (SPEC-stage-schedule).
     """
 
     if ai_model is None:
@@ -1409,7 +1446,8 @@ def run_ai_cycle():
             next_sample += AI_SAMPLE_INTERVAL_SECONDS
 
         if frames_analyzed == 0:
-            reset_transition_candidate("no_valid_frames")
+            if scheduled:
+                reset_transition_candidate("no_valid_frames")
             raise RuntimeError(
                 "No valid AI frames were analyzed during the cycle"
             )
@@ -1423,7 +1461,8 @@ def run_ai_cycle():
 
         # A tied vote is intentionally rejected rather than guessing.
         if len(winners) != 1:
-            reset_transition_candidate("tie")
+            if scheduled:
+                reset_transition_candidate("tie")
             cycle_duration = time.monotonic() - cycle_start
 
             with ai_state_lock:
@@ -1526,7 +1565,8 @@ def run_ai_cycle():
 
         transition = evaluate_stage_transition(
             winning_stage,
-            confident
+            confident,
+            scheduled
         )
 
         print(
@@ -1594,25 +1634,62 @@ def run_ai_cycle():
 # AI BACKGROUND WORKER
 # ============================================================
 
+def run_scheduled_check():
+    """One cycle of the daily stage-check window. Returns True if a cycle ran."""
+    global schedule_attempt
+    with schedule_lock:
+        attempt = schedule_attempt
+    today = stage_schedule.local_date(stage_schedule.local_now()).isoformat()
+    if not attempt or attempt.get("date") != today:
+        # A new window starts with a fresh candidate.
+        reset_transition_candidate("window_started")
+    result = run_ai_cycle(scheduled=True)
+    if result.get("busy"):
+        return False  # Analyze now is running; try again shortly.
+    hardware = (result.get("transition") or {}).get("hardware") or {}
+    with schedule_lock:
+        schedule_attempt = stage_schedule.record_cycle(
+            schedule_attempt, stage_schedule.local_now(),
+            result.get("detectedStage") if result.get("success") else None,
+            result.get("confidence") if result.get("success") else None,
+            applied=bool(hardware.get("success")))
+        attempt = schedule_attempt
+        try:
+            stage_schedule.save_attempt(STAGE_SCHEDULE_PATH, attempt)
+        except OSError as error:
+            print(f"[SCHEDULE] Could not save attempt: {error}", flush=True)
+    print(f"[SCHEDULE] cycle {attempt['cycles']}/{stage_schedule.DAILY_MAX_CYCLES}: "
+          f"{attempt['detectedStage']} ({attempt['confidence']}) -> {attempt['result']}", flush=True)
+    if attempt["result"] == "not_confirmed":
+        reset_transition_candidate("window_closed_not_confirmed")
+    return True
+
+
 def ai_worker():
+    """Automatic AI cycles run only in the daily stage-check window
+    (stage_schedule.window_due). Outside it, nothing runs."""
 
     # Allow the camera/API to finish
     # starting before first inference.
     time.sleep(3)
+    print("[SCHEDULE] AI worker started (daily window "
+          f"{stage_schedule.DAILY_CHECK_TIME.strftime('%H:%M')} Asia/Manila)", flush=True)
 
     while True:
-
-        with ai_state_lock:
-            enabled = (
-                ai_state["enabled"]
-            )
-
-        if enabled and not (bypass_active() and bypass_overrides.get("stage")):
-            run_ai_cycle()
-
-        time.sleep(
-            AI_INTERVAL_SECONDS
-        )
+        ran = False
+        try:
+            with ai_state_lock:
+                enabled = ai_state["enabled"]
+            with state_lock:
+                current = state.get("stage")
+            with schedule_lock:
+                attempt = schedule_attempt
+            due = stage_schedule.window_due(stage_schedule.local_now(), batch_start_date(), current, attempt)
+            if enabled and due and not (bypass_active() and bypass_overrides.get("stage")):
+                ran = run_scheduled_check()
+        except Exception as error:  # the worker must never die
+            print(f"[SCHEDULE] Worker error: {error}", flush=True)
+        time.sleep(AI_INTERVAL_SECONDS if ran else AI_SCHEDULE_POLL_SECONDS)
 
 
 # ============================================================
@@ -2268,6 +2345,7 @@ def get_ai_status():
         )
 
     result["simulation"] = simulation_snapshot()
+    result["schedule"] = current_schedule_status()
     return jsonify(result)
 
 
@@ -2748,8 +2826,32 @@ def _read_feed_config():
     except (OSError, ValueError, TypeError):
         return dict(DEFAULT_FEED_CONFIG)
 
+def start_new_batch(start):
+    """A changed batch start date: clear the daily attempt and the AI
+    candidate; on days 1-10 set the Arduino to STARTER (owner decision 4)."""
+    global schedule_attempt
+    with schedule_lock:
+        schedule_attempt = None
+        stage_schedule.save_attempt(STAGE_SCHEDULE_PATH, None)
+    reset_transition_candidate("new_batch")
+    day = stage_schedule.batch_day(start, stage_schedule.local_date(stage_schedule.local_now()))
+    result = {"batchStartDate": start, "batchDay": day, "starterApplied": False, "status": "no_stage_change"}
+    if day is not None and day < stage_schedule.GROWER_FROM_DAY:
+        with state_lock:
+            current = str(state.get("stage") or "").strip().upper()
+        if current == "STARTER":
+            result["status"] = "already_starter"
+        else:
+            hardware = apply_confirmed_stage_to_arduino("STARTER")
+            result["starterApplied"] = bool(hardware.get("success"))
+            result["status"] = hardware.get("status")
+    print(f"[AUDIT] new batch {start} (day {day}) by {request_user()}: {result['status']}", flush=True)
+    return result
+
+
 @app.route("/api/feeding/config", methods=["GET", "POST"])
 def feeding_config_api():
+    new_batch = None
     if request.method == "POST":
         body = request.get_json(silent=True) or {}
         try:
@@ -2768,9 +2870,12 @@ def feeding_config_api():
             config = {"birdCount": count, "batchStartDate": start, "times": sorted(times),
                       "timezone": "Asia/Manila", "automaticEnabled": False}
             with feed_config_lock:
+                previous_start = _read_feed_config().get("batchStartDate")
                 FEED_CONFIG_PATH.write_text(_json.dumps(config, indent=2))
         except (ValueError, TypeError) as exc:
             return jsonify({"success": False, "error": str(exc)}), 400
+        if start != previous_start:
+            new_batch = start_new_batch(start)
     with feed_config_lock:
         config = _read_feed_config()
     with state_lock:
@@ -2781,6 +2886,7 @@ def feeding_config_api():
     compartment = inventory.get("selectedCompartment")
     target = plan.get("targetGrams")
     return jsonify({**config, **plan, "confirmedStage": stage,
+                    **({"newBatch": new_batch} if new_batch else {}),
                     "selectedCompartment": compartment,
                     "estimatedSeconds": round(target / FEED_RATES[compartment], 3) if target and compartment in FEED_RATES else None,
                     "calibrationRatesGramsPerSecond": FEED_RATES,

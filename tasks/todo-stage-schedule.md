@@ -46,6 +46,17 @@ S1 stage_schedule.py + unit tests ── S2 app.py wiring ── Pi deploy ─�
 **Files:** `raspberry-pi/stage_schedule.py`, `tests/stage-schedule/test_stage_schedule.py` · **Scope:** S
 
 ## S2: Pi wiring in `app.py`
+**Status (2026-11-08): deployed to the Pi**, Checkpoint S-A in progress.
+- Edits: `stage_schedule` import, `schedule_attempt` (loaded from `stage_schedule.json`), `evaluate_stage_transition(..., scheduled)`, `run_ai_cycle(scheduled)`, `run_scheduled_check()`, `ai_worker()` (window only, 30 s poll), `start_new_batch()` on a changed date, `schedule` in `/api/ai/status`.
+- Manual and maintenance cycles no longer reset the scheduled candidate on tie or no frames.
+- Offline harness (stubbed hardware, fake clock): 28/28 checks.
+- On the Pi:
+  - backup `app_backup_before_stage_schedule_*.py`, sha `5cd6dce8` (app) / `180a5392` (stage_schedule);
+  - `schedule` shows day 29, `grower_check`, 18 days overdue (stage still STARTER);
+  - Analyze now → Grower 90.3 %, `manual_check_only`, stage unchanged;
+  - camera 200; `snapshot.ai.schedule` present.
+- Note: a restart mid-window keeps the cycle count (persisted) but the in-memory 3-in-a-row candidate starts again.
+
 **Description:**
 - `ai_worker()`:
   - Every 30 s, check `window_due()`. Inside the window, run a cycle every `AI_INTERVAL_SECONDS` (5 min) and record each result.
