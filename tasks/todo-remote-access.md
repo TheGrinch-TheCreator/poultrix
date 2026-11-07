@@ -84,6 +84,8 @@ Checks: tsc 2 errors fewer; lint unchanged; build ✅. The WebRTC preview (`127.
 **Files:** the pages above + `src/lib/live-feeding.ts` (new) · **Scope:** M (may split into R4a feeding / R4b the rest) · **Depends on:** R3
 
 ## R5: Bypass page through the Worker
+**Status (2026-11-07):** implemented and deployed with R6.
+
 **Description:** `bypass.tsx` calls `/api/pi/bypass/*` via `piFetch`, with the maintenance token header. Show 429 as "Too many attempts, wait 10 minutes".
 
 **Acceptance:**
@@ -93,10 +95,12 @@ Checks: tsc 2 errors fewer; lint unchanged; build ✅. The WebRTC preview (`127.
 **Files:** `src/routes/bypass.tsx`, `src/lib/pi-client.ts` · **Scope:** S · **Depends on:** R3
 
 ## R6: Remove the direct Pi URL; deploy
+**Status (2026-11-07):** `API_URL` removed from `live-hardware.ts`; `VITE_POULTRIX_API_URL` removed from `.env.local`. Clean build: no `192.168` in `dist/`. tsc 18 → 15 errors (none new).
+
 **Description:** Remove `API_URL` / `VITE_POULTRIX_API_URL` from `live-hardware.ts` and `.env.local`. Build, check the bundle has no `192.168.`, deploy.
 
 **Acceptance:**
-- [ ] `grep -r "192.168" dist/client` → nothing
+- [x] `grep -r "192.168" dist/client` → nothing
 - [ ] Deployed; the old version id is recorded for rollback
 
 **Files:** `src/lib/live-hardware.ts`, `.env.local` (local only) · **Scope:** S · **Depends on:** R4, R5

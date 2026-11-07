@@ -1,8 +1,6 @@
 import { useState } from "react";
 import { piErrorMessage, piFetch } from "@/lib/pi-client";
 import { refreshSnapshot, usePiSnapshot } from "@/lib/pi-snapshot";
-/** @deprecated Direct LAN URL; removed in remote-access R6. Use piFetch(). */
-export const API_URL = (import.meta.env.VITE_POULTRIX_API_URL || "http://192.168.1.48:5000").replace(/\/$/, "");
 export type Hardware = { connected?: boolean; arduinoOnline?: boolean; piSeenByArduino?: boolean|null; operatingStatus?: string; mode?: string; stage?: string; temperature?: number|null; humidity?: number|null; lightRaw?: number|null; fansOn?: number; heatersOn?: number; led?: boolean; temperatureTarget?: {min:number;max:number}; camera?: {connected?:boolean}; ai?: AI };
 export type AI = { detectedStage?:string|null; confidence?:number|null; lastInference?:string|null; status?:string; confident?:boolean; error?:string|null; confirmationCount?:number; consecutiveCount?:number; votes?:Record<string,number>; cycleRunning?:boolean; framesAnalyzed?:number; failedFrames?:number; transitionStatus?:string; transitionConfirmations?:number; transitionRequired?:number; hardwareTransitionStatus?:string; hardwareTransitionError?:string|null; lastTransitionResult?:{status:string;from:string;to:string;timestamp?:string}|null };
 // Live data comes from the shared snapshot poller (one /api/pi/snapshot
