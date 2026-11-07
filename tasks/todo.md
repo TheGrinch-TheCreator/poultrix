@@ -136,13 +136,15 @@ Deploy order: **firmware (Phase 1) must be flashed before the Pi change (Phase 2
 ---
 
 ## Task 7: Header shows status, not a mode toggle
+**Status (2026-11-07):** implemented, not committed. tsc: same 19 diagnostics as before (no new), eslint on changed files: Prettier only, `npm run build` ✅, no `api/mode/` left in `dist`. Added a 4th amber state **Connecting…** (Arduino connected but reports `PI_STATUS:OFFLINE`, e.g. just after a reset). **Manual LAN check not done.**
+
 **Description:** In `AppShell.tsx`:
 - Remove `toggleSystemMode`, the LIVE confirm dialog and the button.
 - Show a read-only pill using the existing pill/dot styles: **Online** (Pi reachable, Arduino connected, Arduino sees Pi), **Arduino offline** (Pi reachable, `connected:false`), **Pi offline** (Pi unreachable).
 - Read from `/api/status`. Add `arduinoOnline` / `piSeenByArduino` to the `Hardware` type in `live-hardware.ts`.
 
 **Acceptance criteria:**
-- [ ] No element in the header sends a POST
+- [x] No element in the header sends a POST
 - [ ] The pill shows each of the three states correctly
 - [ ] Layout and spacing unchanged on desktop and mobile
 

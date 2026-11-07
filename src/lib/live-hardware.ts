@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 export const API_URL = (import.meta.env.VITE_POULTRIX_API_URL || "http://192.168.1.48:5000").replace(/\/$/, "");
-export type Hardware = { connected?: boolean; mode?: string; stage?: string; temperature?: number|null; humidity?: number|null; lightRaw?: number|null; fansOn?: number; heatersOn?: number; led?: boolean; temperatureTarget?: {min:number;max:number}; camera?: {connected?:boolean}; ai?: AI };
+export type Hardware = { connected?: boolean; arduinoOnline?: boolean; piSeenByArduino?: boolean|null; operatingStatus?: string; mode?: string; stage?: string; temperature?: number|null; humidity?: number|null; lightRaw?: number|null; fansOn?: number; heatersOn?: number; led?: boolean; temperatureTarget?: {min:number;max:number}; camera?: {connected?:boolean}; ai?: AI };
 export type AI = { detectedStage?:string|null; confidence?:number|null; lastInference?:string|null; status?:string; confident?:boolean; error?:string|null; confirmationCount?:number; consecutiveCount?:number; votes?:Record<string,number>; cycleRunning?:boolean; framesAnalyzed?:number; failedFrames?:number; transitionStatus?:string; transitionConfirmations?:number; transitionRequired?:number; hardwareTransitionStatus?:string; hardwareTransitionError?:string|null; lastTransitionResult?:{status:string;from:string;to:string;timestamp?:string}|null };
 export function useHardware() {
  const [data,setData]=useState<Hardware|null>(null); const [error,setError]=useState<string|null>(null);
