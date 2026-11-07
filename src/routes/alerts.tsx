@@ -1,4 +1,4 @@
-import { API_URL } from "@/lib/live-hardware";
+import { piFetch } from "@/lib/pi-client";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { AlertOctagon, AlertTriangle, Check, Info, Undo2, RefreshCw } from "lucide-react";
@@ -18,7 +18,7 @@ const FILTERS = ["All", "Active", "Acknowledged"] as const;
 function AlertsPage() {
   const { alerts, acknowledged, loading } = useLiveAlerts();
   const [feedAlerts,setFeedAlerts]=useState<{type:string;message:string;compartment?:number}[]>([]);
-  useEffect(()=>{let active=true;const load=async()=>{try{const r=await fetch(`${API_URL}/api/feeding/inventory`,{cache:"no-store"});if(!r.ok)return;const d=await r.json();if(active)setFeedAlerts(Array.isArray(d.alerts)?d.alerts:[]);}catch{}};void load();const timer=setInterval(()=>void load(),5000);return()=>{active=false;clearInterval(timer)};},[]);
+  useEffect(()=>{let active=true;const load=async()=>{try{const r=await piFetch(`/feeding/inventory`,{cache:"no-store"});if(!r.ok)return;const d=await r.json();if(active)setFeedAlerts(Array.isArray(d.alerts)?d.alerts:[]);}catch{}};void load();const timer=setInterval(()=>void load(),30000);return()=>{active=false;clearInterval(timer)};},[]);
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>("All");
   const visible = filter === "Active" ? alerts : filter === "Acknowledged" ? acknowledged : [...alerts, ...acknowledged];
   return <>

@@ -4,7 +4,8 @@ import { Camera } from "lucide-react";
 import { FlockWebRTCPreview } from "@/components/poultrix/FlockWebRTCPreview";
 import { useEffect, useState } from "react";
 import { Card, CardTitle, PageHeader, Pill, StageBadge } from "@/components/poultrix/ui";
-import { API_URL, useAI, useHardware, stageName } from "@/lib/live-hardware";
+import { useAI, useHardware, stageName } from "@/lib/live-hardware";
+import { piFetch } from "@/lib/pi-client";
 import type { Stage } from "@/lib/demo-data";
 import { getMyFarm } from "@/lib/farm-store";
 import { toast } from "sonner";
@@ -20,7 +21,7 @@ function FlockPage() {
     let active = true;
     const refresh = async () => {
       try {
-        const response = await fetch(`${API_URL}/api/feeding/config`, { cache: "no-store" });
+        const response = await piFetch(`/feeding/config`, { cache: "no-store" });
         if (!response.ok) throw new Error("Feeding configuration unavailable");
         const config = await response.json();
         const count = Number(config.birdCount);
@@ -33,7 +34,7 @@ function FlockPage() {
       }
     };
     void refresh();
-    const timer = setInterval(() => void refresh(), 5000);
+    const timer = setInterval(() => void refresh(), 60000);
     window.addEventListener("poultrix:feeding-updated", refresh);
     return () => { active = false; clearInterval(timer); window.removeEventListener("poultrix:feeding-updated", refresh); };
   }, []);

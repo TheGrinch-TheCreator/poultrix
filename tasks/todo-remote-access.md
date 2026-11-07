@@ -41,7 +41,7 @@ Spec: `SPEC-remote-access.md` · Plan: `tasks/plan-remote-access.md`
 - [x] Curl matrix passes against the deployed Worker; the current site still works on the LAN (2026-11-07; live 403 for a non-approved account not yet tried, covered by the local test)
 
 ## R3: Browser Pi client + shared snapshot store
-**Status (2026-11-07):** implemented, **not deployed**. `src/lib/pi-client.ts` (`piFetch`/`piJson`, 401 → refresh + retry, `PiError` codes), `src/lib/pi-snapshot.ts` (shared 5 s poller, paused when hidden). `useHardware`/`useAI`/`useLiveAlerts` read from it. Alert acknowledgements sync every 60 s instead of every 3 s. The header pill shows Not approved / Signed out, with a banner for unapproved accounts. tsc one error fewer; build ✅. Note: AI-cycle progress now refreshes every 5 s (was 1 s).
+**Status (2026-11-07):** **deployed** (Worker `a8c6e9f3`). `src/lib/pi-client.ts` (`piFetch`/`piJson`, 401 → refresh + retry, `PiError` codes), `src/lib/pi-snapshot.ts` (shared 5 s poller, paused when hidden). `useHardware`/`useAI`/`useLiveAlerts` read from it. Alert acknowledgements sync every 60 s instead of every 3 s. The header pill shows Not approved / Signed out, with a banner for unapproved accounts. tsc one error fewer; build ✅. Note: AI-cycle progress now refreshes every 5 s (was 1 s).
 
 **Description:**
 - `src/lib/pi-client.ts`: `piFetch(path, init)` → same-origin `/api/pi/...` with the Supabase bearer; one refresh-and-retry on 401; typed errors for 401/403/429/5xx.
@@ -56,10 +56,29 @@ Spec: `SPEC-remote-access.md` · Plan: `tasks/plan-remote-access.md`
 **Files:** `src/lib/pi-client.ts`, `src/lib/live-hardware.ts`, `src/lib/live-weights.ts`, `src/lib/live-alerts.ts` · **Scope:** M · **Depends on:** R-A
 
 ## R4: Pages and components use the adapters
+**Status (2026-11-07):** implemented, not deployed. New `src/lib/live-endpoints.ts`:
+- `usePiEndpoint`: snapshot parts, otherwise a slow poll.
+- `usePiResource`: visible-only poll.
+- `useCameraStreamUrl`: tokenized MJPEG URL, cleared while hidden, renewed every 45 min.
+
+Changes:
+- `authorizedFetch` was added to `pi-client.ts` for `/api/history`.
+- Moved to the gateway: FeedingPlanner (7 calls), feeding (3), alerts (1), flock (1), environment history (via the Worker `/api/history`), AI-stage camera, profile sign-out bypass exit.
+- The dashboard and hardware pages read weights, feeding status and health from the snapshot (they were 3 requests every 3 s each).
+
+New poll rates:
+| What | Before | Now |
+|---|---|---|
+| Feeding plan | 3–5 s | 30–60 s |
+| Inventory | 2–5 s | 10–30 s |
+| Feed job (manual panel only) | 1.5 s | 3 s |
+
+Checks: tsc 2 errors fewer; lint unchanged; build ✅. The WebRTC preview (`127.0.0.1:8088`) is left as is: it only works in a browser on the Pi.
+
 **Description:** Move direct `API_URL` fetches into `src/lib/` functions using `piFetch`: `FeedingPlanner.tsx`, `feeding.tsx`, `ai-stage.tsx` (classify + camera `<img>` with the token, stopped when hidden/unmounted), `flock.tsx`, `profile.tsx`, `alerts.tsx`, `environment.tsx`, `hardware.tsx`, `index.tsx`. Hide the WebRTC preview unless on the Pi itself.
 
 **Acceptance:**
-- [ ] `grep -rn "API_URL\|192\.168" src --include=*.tsx` → nothing outside `src/lib/`
+- [x] `grep -rn "API_URL\|192\.168" src --include=*.tsx` → nothing outside `src/lib/` (except `bypass.tsx`, R5)
 - [ ] Feeding plan load/save, manual preview/start, job stop, inventory refill/init, AI classify all work through `/api/pi`
 
 **Files:** the pages above + `src/lib/live-feeding.ts` (new) · **Scope:** M (may split into R4a feeding / R4b the rest) · **Depends on:** R3

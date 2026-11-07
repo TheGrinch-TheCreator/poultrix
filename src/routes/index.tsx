@@ -2,7 +2,8 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Camera, Cpu, Droplets, Fan, Flame, Lightbulb, ScanEye, Sun, Thermometer, Wheat } from "lucide-react";
 import { Card, CardTitle, Pill } from "@/components/poultrix/ui";
-import { API_URL, useAI, useHardware, display, stageName } from "@/lib/live-hardware";
+import { useAI, useHardware, display, stageName } from "@/lib/live-hardware";
+import { usePiEndpoint } from "@/lib/live-endpoints";
 import { formatWeight, readingStatus, formatReadingTime, type WeightPayload } from "@/lib/live-weights";
 
 export const Route = createFileRoute("/")({
@@ -18,28 +19,8 @@ type Gate = { status?: string; durationMs?: number; estimatedGrams?: number | nu
 type Feeding = { connected?: boolean; gates?: Record<string, Gate>; events?: unknown[]; pending?: { gate?: number; durationMs?: number } | null };
 
 function useEndpoint<T>(path: string) {
-  const [data, setData] = useState<T | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    let active = true;
-    let busy = false;
-    const load = async () => {
-      if (busy) return;
-      busy = true;
-      try {
-        const response = await fetch(`${API_URL}${path}`, { cache: "no-store" });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const value = await response.json() as T;
-        if (active) { setData(value); setError(null); }
-      } catch (cause) {
-        if (active) { setData(null); setError(cause instanceof Error ? cause.message : "Unavailable"); }
-      } finally { busy = false; }
-    };
-    void load();
-    const timer = setInterval(() => void load(), 3000);
-    return () => { active = false; clearInterval(timer); };
-  }, [path]);
-  return { data, error };
+  // Live parts come from the shared snapshot; the feeding plan is polled every 60 s.
+  return usePiEndpoint<T>(path);
 }
 
 function Dashboard() {

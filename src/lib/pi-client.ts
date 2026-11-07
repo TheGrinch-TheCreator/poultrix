@@ -50,7 +50,12 @@ function errorCode(status: number, code: unknown): PiErrorCode {
 
 /** fetch() a Pi path such as "/feeding/config". Retries once on 401 after
  *  refreshing the session. Throws PiError for non-2xx responses. */
-export async function piFetch(path: string, init: RequestInit & { maintenanceToken?: string } = {}): Promise<Response> {
+export function piFetch(path: string, init: RequestInit & { maintenanceToken?: string } = {}): Promise<Response> {
+  return authorizedFetch(`${PI_BASE}${path}`, init);
+}
+
+/** Same-origin Worker route (e.g. /api/history) with the Supabase bearer. */
+export async function authorizedFetch(url: string, init: RequestInit & { maintenanceToken?: string } = {}): Promise<Response> {
   const { maintenanceToken, ...rest } = init;
   const send = async (token: string | null) => {
     const headers = new Headers(rest.headers);
@@ -58,7 +63,7 @@ export async function piFetch(path: string, init: RequestInit & { maintenanceTok
     if (maintenanceToken) headers.set("x-poultrix-maintenance", maintenanceToken);
     if (rest.body !== undefined && !headers.has("content-type")) headers.set("content-type", "application/json");
     try {
-      return await fetch(`${PI_BASE}${path}`, { ...rest, headers, cache: "no-store" });
+      return await fetch(url, { ...rest, headers, cache: "no-store" });
     } catch {
       throw new PiError("No internet connection", 0, "NETWORK");
     }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { API_URL } from "@/lib/live-hardware";
+import { authorizedFetch } from "@/lib/pi-client";
 import { createFileRoute } from "@tanstack/react-router";
 import { Droplets, Sun, Thermometer, ShieldCheck } from "lucide-react";
 import { Card, CardTitle, DeviceState, PageHeader, Pill } from "@/components/poultrix/ui";
@@ -11,7 +11,7 @@ function EnvPage(){const {data,error}=useHardware();
  const [history,setHistory]=useState<EnvReading[]>([]);
  const [historyError,setHistoryError]=useState("");
  const [days,setDays]=useState(1);
- useEffect(()=>{let active=true;async function load(){try{const res=await fetch(`${API_URL}/api/history?days=${days}`,{cache:"no-store"});if(!res.ok)throw Error(`History API HTTP ${res.status}`);const json=await res.json();if(active){setHistory(Array.isArray(json.environment)?json.environment:[]);setHistoryError("");}}catch(e){if(active)setHistoryError(e instanceof Error?e.message:"History unavailable");}}void load();const timer=setInterval(load,30000);return()=>{active=false;clearInterval(timer)};},[days]);
+ useEffect(()=>{let active=true;async function load(){try{const res=await authorizedFetch(`/api/history?days=${days}`);if(!res.ok)throw Error(`History API HTTP ${res.status}`);const json=await res.json();if(active){setHistory(Array.isArray(json.environment)?json.environment:[]);setHistoryError("");}}catch(e){if(active)setHistoryError(e instanceof Error?e.message:"History unavailable");}}void load();const timer=setInterval(load,30000);return()=>{active=false;clearInterval(timer)};},[days]);
 const stage=stageName(data?.stage);const temp=data?.temperature;const target=data?.temperatureTarget;const online=!!data?.connected;const high=typeof temp==="number"&&target&&temp>target.max;const low=typeof temp==="number"&&target&&temp<target.min;
 return <><PageHeader title="Environment" subtitle="Live readings from Raspberry Pi 5 and Arduino Mega" right={<Pill tone={online?"ok":"warn"}>{online?"Hardware connected":error?"API offline":"Waiting for hardware"}</Pill>}/>
 <div className="mb-4 rounded-lg border p-4 text-sm"><strong>Stage environmental standard</strong><p>Starter: 32.2–35.0°C (days 1–10) · Grower: 26.7–29.4°C (days 11–24) · Finisher: provisional 24–26°C (days 25–42; validate before use).</p><p>LED lighting: ON below 50 estimated lux, OFF above 50; heater ON takes priority and keeps the LED OFF. The Arduino controls this automatically from valid sensor readings, even while the Pi is offline.</p></div><div className="grid gap-5 md:grid-cols-3"><Card><CardTitle icon={<Thermometer className="h-4 w-4"/>} right={<Pill tone={!online?"neutral":high||low?"warn":"ok"}>{!online?"Offline":high?"Too hot":low?"Too cold":temp==null?"Waiting":"Normal"}</Pill>}>Temperature</CardTitle><div className="num text-5xl font-extrabold">{display(temp,"°C")}</div><p className="text-sm font-medium">Target: {target?`${target.min}–${target.max}°C`:"—"} · Stage: {stage||"—"}</p></Card>

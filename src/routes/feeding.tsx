@@ -1,6 +1,6 @@
 import { FeedingPlanner } from "@/components/poultrix/FeedingPlanner";
 import { useEffect, useState } from "react";
-import { API_URL } from "@/lib/live-hardware";
+import { piFetch } from "@/lib/pi-client";
 
 type WeightSensor = { status:string; raw:number|null; weightGrams:number|null; updatedAt:string|null };
 type WeightReadings = { connected:boolean; hopper:WeightSensor; trough:WeightSensor };
@@ -19,10 +19,10 @@ function LiveCompartmentManager(){
  const [name,setName]=useState("");
  const [stages,setStages]=useState<string[]>([]);
  const [starting,setStarting]=useState<Record<number,string>>({1:"",2:""});
- const load=async()=>{try{const r=await fetch(`${API_URL}/api/feeding/inventory`,{cache:"no-store"});if(!r.ok)throw Error(`Backend HTTP ${r.status}`);setData(await r.json());setError("");}catch(e){setError(e instanceof Error?e.message:"Connection failed");}};
- const loadWeights=async()=>{try{const r=await fetch(`${API_URL}/api/feeding/weight`,{cache:"no-store"});if(!r.ok)throw Error(`HTTP ${r.status}`);setWeights(await r.json());setWeightError("");}catch(e){setWeightError(e instanceof Error?e.message:"Sensor connection failed");}};
+ const load=async()=>{try{const r=await piFetch(`/feeding/inventory`,{cache:"no-store"});if(!r.ok)throw Error(`Backend HTTP ${r.status}`);setData(await r.json());setError("");}catch(e){setError(e instanceof Error?e.message:"Connection failed");}};
+ const loadWeights=async()=>{try{const r=await piFetch(`/feeding/weight`,{cache:"no-store"});if(!r.ok)throw Error(`HTTP ${r.status}`);setWeights(await r.json());setWeightError("");}catch(e){setWeightError(e instanceof Error?e.message:"Sensor connection failed");}};
  useEffect(()=>{void load();void loadWeights();const timer=setInterval(()=>{void load();void loadWeights();},2000);return()=>clearInterval(timer);},[]);
- const post=async(path:string,payload:unknown)=>{setBusy(true);try{const r=await fetch(`${API_URL}/api/feeding/inventory/${path}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});const result=await r.json();if(!r.ok)throw Error(result.error||`HTTP ${r.status}`);setError("");await load();}catch(e){setError(e instanceof Error?e.message:"Operation failed");}finally{setBusy(false);}};
+ const post=async(path:string,payload:unknown)=>{setBusy(true);try{const r=await piFetch(`/feeding/inventory/${path}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});const result=await r.json();if(!r.ok)throw Error(result.error||`HTTP ${r.status}`);setError("");await load();}catch(e){setError(e instanceof Error?e.message:"Operation failed");}finally{setBusy(false);}};
  const kg=(v:number|null)=>v===null?"Not initialized":`${(v/1000).toFixed(2)} kg estimated`;
  return <section className="mb-6 space-y-4">
   <div><h2 className="text-xl font-bold">Feed compartments</h2><p className="text-sm text-muted-foreground">Independent feed assignments and refill ledger • physical dispensing locked during calibration</p></div>

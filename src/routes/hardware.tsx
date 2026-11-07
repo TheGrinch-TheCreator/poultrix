@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
 import { Activity, AlertTriangle, CheckCircle2, CircleOff, HelpCircle, RefreshCw } from "lucide-react";
-import { API_URL, useAI, useHardware } from "@/lib/live-hardware";
+import { useAI, useHardware } from "@/lib/live-hardware";
+import { usePiEndpoint } from "@/lib/live-endpoints";
 import { grams, formatWeight, type WeightPayload } from "@/lib/live-weights";
 import { Card, CardTitle, PageHeader, Pill } from "@/components/poultrix/ui";
 
@@ -27,28 +27,8 @@ type Condition = "active" | "inactive" | "problem" | "unknown";
 type Component = { name: string; detail: string; condition: Condition };
 
 function useLiveEndpoint<T>(path: string) {
-  const [data, setData] = useState<T | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    let mounted = true;
-    let running = false;
-    const refresh = async () => {
-      if (running) return;
-      running = true;
-      try {
-        const response = await fetch(`${API_URL}${path}`, { cache: "no-store" });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const result = await response.json() as T;
-        if (mounted) { setData(result); setError(null); }
-      } catch (cause) {
-        if (mounted) { setData(null); setError(cause instanceof Error ? cause.message : "Unavailable"); }
-      } finally { running = false; }
-    };
-    void refresh();
-    const interval = setInterval(() => void refresh(), 3000);
-    return () => { mounted = false; clearInterval(interval); };
-  }, [path]);
-  return { data, error };
+  // Health, weights and feeding status come from the shared snapshot.
+  return usePiEndpoint<T>(path);
 }
 
 const label: Record<Condition, string> = { active: "Active", inactive: "Inactive", problem: "Problem", unknown: "Unknown" };

@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { supabase } from "@/integrations/supabase/client";
+import { piFetch } from "@/lib/pi-client";
 import { useProfile } from "@/hooks/use-profile";
 
 export const Route = createFileRoute("/profile")({
@@ -83,7 +84,7 @@ function ProfilePage() {
   }
 
   async function signOut() {
-    try { const token = localStorage.getItem("poultrix_maintenance_token"); if (token) { await fetch((import.meta.env.VITE_POULTRIX_API_URL || "http://192.168.1.48:5000").replace(/\/$/, "") + "/api/bypass/exit", { method: "POST", headers: { "X-Poultrix-Maintenance": token } }); } } catch {} finally { localStorage.removeItem("poultrix_maintenance_token"); }
+    try { const token = localStorage.getItem("poultrix_maintenance_token"); if (token) { await piFetch("/bypass/exit", { method: "POST", maintenanceToken: token }); } } catch {} finally { localStorage.removeItem("poultrix_maintenance_token"); }
     await supabase.auth.signOut();
     nav({ to: "/login", replace: true });
   }
