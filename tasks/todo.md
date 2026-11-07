@@ -83,6 +83,8 @@ Deploy order: **firmware (Phase 1) must be flashed before the Pi change (Phase 2
 ---
 
 ## Task 5: Pi drops the recovery system and mode routes
+**Status (2026-11-07):** implemented, not committed. AST ✅, pyflakes no new warnings, off-Pi smoke test ✅ (mode routes 410, alias fields, LIVE after reconnect with no user action, sensor check while LIVE). **Not run on the Pi yet.**
+
 **Description:** In `app.py`:
 - Delete the `recovery_*` globals, `recovery_block`, `arduino_recovery_worker` (and its thread start), `save_live_preference` / `load_live_preference`, the LIVE ACK timeout in `arduino_heartbeat_worker`, and the `BOOT:SAFE` / `MODE_ACK:` / `ERROR:DHT22_NOT_READY` / `WATCHDOG:TIMEOUT` recovery branches. Also remove the recovery calls in `serial_worker` and `disconnect_arduino`.
 - `/api/mode/live|safe|test` → 410 `"Mode switching removed; Poultrix is always automatic"`.
@@ -92,12 +94,12 @@ Deploy order: **firmware (Phase 1) must be flashed before the Pi change (Phase 2
 - Startup log: remove the recovery lines.
 
 **Acceptance criteria:**
-- [ ] `grep -n "recovery_" raspberry-pi/app.py` returns only the alias route
+- [x] `grep -n "recovery_" raspberry-pi/app.py` returns only the alias route
 - [ ] `POST /api/mode/safe` and `/api/mode/live` → 410
 - [ ] After USB unplug/replug, `/api/status` shows `connected:true` and `operatingStatus:"LIVE"` with no user action
 
 **Verification:**
-- [ ] `python -c "import ast;ast.parse(open('raspberry-pi/app.py',encoding='utf-8').read())"`
+- [x] `python -c "import ast;ast.parse(open('raspberry-pi/app.py',encoding='utf-8').read())"`
 - [ ] On the Pi: curl `/api/status`, `/api/recovery/status`, `POST /api/mode/safe`
 
 **Dependencies:** Checkpoint A · **Files:** `raspberry-pi/app.py` · **Scope:** M
@@ -105,6 +107,8 @@ Deploy order: **firmware (Phase 1) must be flashed before the Pi change (Phase 2
 ---
 
 ## Task 6: Bypass session survives a serial hiccup
+**Status (2026-11-07):** implemented, not committed. Off-Pi smoke test ✅ (same token returns 200 + `manualControlsPaused:true` + `connectionLostAt` after serial loss; Resume works; feeding refused while `PI_STATUS:OFFLINE` or disconnected). **Not run on the Pi yet.**
+
 **Description:**
 - Replace `invalidate_bypass_on_serial_loss()` with `pause_bypass_on_serial_loss()`: keep the token and expiry, set `bypass_paused=True`, clear overrides/sim readings, cancel the schedule test and simulation, and unblock pending ACK waits.
 - Add `connectionLostAt` to `/api/bypass/status`. `/api/bypass/resume` (re-sends `BYPASS:ON`) is the way back.
@@ -116,7 +120,7 @@ Deploy order: **firmware (Phase 1) must be flashed before the Pi change (Phase 2
 - [ ] Manual feeding works when connected; refused when disconnected
 
 **Verification:**
-- [ ] AST parse check
+- [x] AST parse check
 - [ ] On the Pi: log in to bypass, unplug USB 20 s, replug, call status/resume with the same token
 
 **Dependencies:** T5 · **Files:** `raspberry-pi/app.py` · **Scope:** S

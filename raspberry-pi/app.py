@@ -81,7 +81,11 @@ state = {
     "feedWeightStatus": "WAITING",
     "feedWeightUpdatedAt": None,
 
-    "mode": "test",
+    # Always "live" with the always-live firmware (compat constant).
+    "mode": "unknown",
+    # Arduino's view of the Pi heartbeat (PI_STATUS:/PI:). None = not reported.
+    "piSeenByArduino": None,
+    "lastBootAt": None,
     "stage": "GROWER",
 
     "temperature": None,
@@ -258,22 +262,8 @@ def find_arduino():
 
 
 def disconnect_arduino():
-    global arduino, recovery_live_pending, recovery_token, recovery_need_check
-    with recovery_lock:
-        # Preserve a previously acknowledged LIVE preference across an ordinary
-        # USB disconnect. Cancel in-flight handshakes; never treat the reconnect
-        # itself as permission to energize actuators. The recovery worker must
-        # observe SAFE, pass a fresh sensor check and receive a tokenized ACK.
-        # Explicit SAFE, watchdog and sensor faults still revoke authorization.
-        global recovery_live_pending, recovery_token, recovery_need_check, recovery_pending_since
-        recovery_live_pending = False
-        recovery_token = None
-        recovery_need_check = False
-        recovery_pending_since = None
-        recovery_event.clear()
-        if recovery_authorized and not recovery_blocked:
-            print("[RECOVERY] USB lost; preserving verified LIVE preference for checked recovery", flush=True)
-
+    # The Arduino keeps automatic control on its own; nothing to re-authorize.
+    global arduino
     with arduino_lock:
         if arduino is not None:
             try:
@@ -294,6 +284,7 @@ def disconnect_arduino():
         state["connected"] = False
         state["arduinoPort"] = None
         state["mode"] = "unknown"
+        state["piSeenByArduino"] = None
         state["lastSeen"] = None
         state["temperature"] = None
         state["humidity"] = None
@@ -342,10 +333,6 @@ def connect_arduino():
         reset_sensor_check()
         send_command("SYS:INIT")
         send_command("STATUS")
-        with recovery_lock:
-            if recovery_authorized and not recovery_blocked:
-                print("[RECOVERY] Saved LIVE preference; validating boot sensors", flush=True)
-                recovery_event.set()
 
         return True
 
@@ -454,7 +441,6 @@ def parse_bool_list(value, count):
 
 
 def process_message(message):
-    global recovery_authorized, recovery_live_pending, recovery_token, recovery_need_check, recovery_pending_since
     message = message.strip()
 
     if not message:
@@ -522,37 +508,19 @@ def process_message(message):
         bypass_ack_event.set()
         return
 
-    if message == "BOOT:SAFE":
-        with recovery_lock:
-            if recovery_authorized and not recovery_blocked:
-                recovery_event.set()
-        print("[RECOVERY] Arduino boot detected", flush=True)
+    if message.startswith("BOOT:"):
+        # Arduino reset (power, USB open or brownout). It resumes automatic
+        # control by itself; the event is logged to history.
+        print(f"[ARDUINO] Boot detected: {message}", flush=True)
+        with state_lock:
+            state["lastBootAt"] = utc_timestamp()
+            state["piSeenByArduino"] = False
         return
 
-    if message == "WATCHDOG:TIMEOUT":
-        with recovery_lock:
-            recovery_block("WATCHDOG_TIMEOUT")
-        return
-
-    if message.startswith("MODE_ACK:LIVE:"):
-        token = message[len("MODE_ACK:LIVE:"):]
-        with recovery_lock:
-            if recovery_live_pending and token == recovery_token:
-                recovery_authorized = True
-                save_live_preference(True)
-                recovery_live_pending = False
-                recovery_token = None
-                recovery_pending_since = None
-                recovery_need_check = False
-                recovery_event.clear()
-                print("[RECOVERY] LIVE acknowledged", flush=True)
-            else:
-                print("[RECOVERY] Ignored stale LIVE acknowledgment", flush=True)
-        return
-
-    if message.startswith("ERROR:DHT22_NOT_READY"):
-        with recovery_lock:
-            recovery_block("DHT22_NOT_READY")
+    if message in ("PI:ONLINE", "PI:OFFLINE"):
+        print(f"[ARDUINO] {message}", flush=True)
+        with state_lock:
+            state["piSeenByArduino"] = message == "PI:ONLINE"
         return
 
     if ":" not in message:
@@ -637,33 +605,11 @@ def process_message(message):
             elif key == "FEED_WEIGHT_STATUS":
                 state["feedWeightStatus"] = value.upper()
             elif key == "MODE_STATUS":
-                # Periodic status only: never grants LIVE authorization.
-                old_mode = state.get("mode")
+                # Compatibility constant: the always-live firmware reports LIVE.
                 state["mode"] = value.lower()
-                if state["mode"] == "safe" and old_mode != "safe":
-                    global recovery_safe_since
-                    recovery_safe_since = time.monotonic()
-                    if recovery_authorized and not recovery_blocked:
-                        recovery_event.set()
-                elif state["mode"] == "live":
-                    recovery_safe_since = None
 
-                if state["mode"] == "live":
-                    state["lux"] = None
-
-            elif key == "MODE_OK":
-
-                state["mode"] = (
-                    value.lower()
-                )
-
-                # Legacy acknowledgments never grant recovery authorization.
-                # Only token-matched MODE_ACK:LIVE can do that.
-
-                if state["mode"] == "live":
-                    # Do not show simulated lux
-                    # as real LDR lux.
-                    state["lux"] = None
+            elif key == "PI_STATUS":
+                state["piSeenByArduino"] = value.upper() == "ONLINE"
 
 
             elif key == "STAGE_OK":
@@ -823,184 +769,37 @@ def arduino_heartbeat_worker():
 
     while True:
         time.sleep(2)
-        with recovery_lock:
-            if (recovery_live_pending and recovery_pending_since is not None
-                    and time.monotonic() - recovery_pending_since > 8):
-                recovery_block("LIVE_ACK_TIMEOUT")
         with state_lock:
             connected = state.get("connected") is True
         if connected:
             send_command("SYS:PING")
 
 
-# ============================================================
-# ARDUINO RECOVERY MONITOR
-# ============================================================
-
-# Persist deliberate LIVE preference across Raspberry Pi restarts.
-# This is a prototype convenience, NOT a safety-rated power-loss controller.
-LIVE_PREFERENCE_PATH = "/home/raspberry/poultrix-api/live_startup_preference"
-
-def save_live_preference(enabled):
-    import tempfile
-    directory = os.path.dirname(LIVE_PREFERENCE_PATH)
-    os.makedirs(directory, exist_ok=True)
-    fd, temp_path = tempfile.mkstemp(prefix=".live-pref-", dir=directory)
-    try:
-        with os.fdopen(fd, "w") as f:
-            f.write("LIVE\n" if enabled else "SAFE\n")
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(temp_path, LIVE_PREFERENCE_PATH)
-    finally:
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
-
-def load_live_preference():
-    try:
-        with open(LIVE_PREFERENCE_PATH) as f:
-            return f.read().strip() == "LIVE"
-    except (OSError, ValueError):
+def telemetry_fresh_locked():
+    """Call with state_lock held. True if a status line arrived recently."""
+    stamp = state.get("lastSeen")
+    if not stamp:
         return False
+    try:
+        age = (datetime.now(timezone.utc) - datetime.fromisoformat(stamp)).total_seconds()
+    except (ValueError, TypeError):
+        return False
+    return age < ARDUINO_RX_TIMEOUT_SECONDS
 
-# Startup authorization is restored only from an explicitly acknowledged LIVE.
 
-recovery_enabled = True
-recovery_authorized = True  # LIVE-first: request checked activation at every startup
-recovery_live_pending = False
-recovery_token = None
-recovery_pending_since = None
-recovery_blocked = False
-recovery_block_reason = None
-recovery_need_check = False
-recovery_event = threading.Event()
-recovery_lock = threading.RLock()
-recovery_attempts = 0
-recovery_last_mode = None
-recovery_last_connected = False
-recovery_safe_since = None
-RECOVERY_SAFE_DELAY_SECONDS = 5.0
+def arduino_online_locked():
+    """Call with state_lock held. Connected with fresh telemetry."""
+    return state.get("connected") is True and telemetry_fresh_locked()
 
-def recovery_block(reason):
-    # Called under recovery_lock (RLock).
-    global recovery_authorized, recovery_live_pending, recovery_token
-    global recovery_blocked, recovery_block_reason, recovery_need_check, recovery_pending_since
-    recovery_authorized = False
-    recovery_live_pending = False
-    recovery_token = None
-    recovery_pending_since = None
-    recovery_blocked = True
-    recovery_block_reason = reason
-    recovery_need_check = False
-    recovery_event.clear()
-    save_live_preference(False)
-    print(f"[RECOVERY] BLOCKED: {reason}", flush=True)
 
-def arduino_recovery_worker():
-    global recovery_live_pending, recovery_token, recovery_need_check, recovery_attempts, recovery_pending_since
-    print("[RECOVERY] Controlled recovery worker started", flush=True)
-    while True:
-        recovery_event.wait(1)
-        if not recovery_event.is_set():
-            continue
-        # A reconnect or boot is eligible only if this Pi process had
-        # previously received a matching LIVE acknowledgment.
-        with recovery_lock:
-            if not recovery_enabled or not recovery_authorized or recovery_blocked:
-                recovery_event.clear()
-                continue
-            if recovery_live_pending:
-                continue
-            recovery_event.clear()
-            recovery_attempts += 1
-            attempt = recovery_attempts
-        print(f"[RECOVERY] Attempt {attempt}: waiting for stable SAFE connection", flush=True)
-        deadline = time.monotonic() + 12
-        stable = False
-        while time.monotonic() < deadline:
-            with state_lock:
-                connected = state.get("connected") is True
-                mode = state.get("mode")
-            if connected and mode == "safe":
-                stable = True
-                break
-            time.sleep(.3)
-        if not stable:
-            with recovery_lock:
-                recovery_block("NO_STABLE_SAFE_CONNECTION")
-            continue
-        # Delay recovery until SAFE has persisted for five seconds.
-        # A manual SAFE request revokes authorization and cancels this wait.
-        with recovery_lock:
-            safe_since = recovery_safe_since
-        if safe_since is None:
-            safe_since = time.monotonic()
-        while time.monotonic() - safe_since < RECOVERY_SAFE_DELAY_SECONDS:
-            with recovery_lock:
-                if not recovery_authorized or recovery_blocked:
-                    break
-            time.sleep(0.1)
-        with recovery_lock:
-            if not recovery_authorized or recovery_blocked:
-                continue
-        with state_lock:
-            if state.get("mode") != "safe" or state.get("connected") is not True:
-                continue
-        # Reset cached sensor readings BEFORE issuing a new check.
-        reset_sensor_check()
-        with recovery_lock:
-            if not recovery_authorized or recovery_blocked:
-                continue
-            recovery_need_check = True
-        if not send_command("SENSOR:CHECK"):
-            with recovery_lock:
-                recovery_block("SENSOR_CHECK_SEND_FAILED")
-            continue
-        deadline = time.monotonic() + 8
-        fresh = False
-        while time.monotonic() < deadline:
-            with sensor_check_lock:
-                checked = sensor_check.get("checkedMono")
-                status = sensor_check.get("status")
-            if status == "OK" and checked is not None and time.monotonic() - checked < 5:
-                fresh = True
-                break
-            if status == "ERROR":
-                break
-            time.sleep(.15)
-        with recovery_lock:
-            if not recovery_authorized or recovery_blocked or not recovery_need_check:
-                continue
-            with state_lock:
-                connected = state.get("connected") is True
-                mode = state.get("mode")
-            if not fresh or not connected or mode != "safe":
-                recovery_block("SENSOR_CHECK_FAILED_OR_MODE_CHANGED")
-                continue
-            recovery_token = secrets.token_hex(16)
-            recovery_live_pending = True
-            recovery_pending_since = time.monotonic()
-            recovery_need_check = False
-            token = recovery_token
-            # Holding recovery_lock ensures SAFE requests cannot interleave
-            # between authorization check and the serial command write.
-            if not send_command("MODE:LIVE:" + token):
-                recovery_block("LIVE_SEND_FAILED")
-                continue
-            print("[RECOVERY] Sensor check passed; LIVE command sent", flush=True)
-        deadline = time.monotonic() + 6
-        while time.monotonic() < deadline:
-            with recovery_lock:
-                if not recovery_live_pending or recovery_blocked:
-                    break
-            time.sleep(.1)
-        with recovery_lock:
-            if recovery_live_pending:
-                recovery_block("LIVE_ACK_TIMEOUT")
+def controller_ready_locked():
+    """Call with state_lock held. Ready for feeding / stage commands:
+    online, healthy, and the Arduino is not reporting the Pi as offline."""
+    return (arduino_online_locked()
+            and state.get("mode") == "live"
+            and state.get("piSeenByArduino") is not False
+            and state.get("systemHealth") in ("OK", "READY"))
 
-# ============================================================
-# RECOVERY STATUS (READ ONLY)
-# ============================================================
 
 @app.route("/api/environment/standards", methods=["GET"])
 def environment_standards():
@@ -1011,29 +810,14 @@ def environment_standards():
 
 @app.route("/api/recovery/status", methods=["GET"])
 def get_recovery_status():
-    with recovery_lock:
-        authorized = recovery_authorized
-        pending = recovery_live_pending
-        blocked = recovery_blocked
-        reason = recovery_block_reason
-        attempts = recovery_attempts
-
+    # Alias kept for one release; the same fields are in /api/status.
     with state_lock:
         connected = state.get("connected") is True
         mode = str(state.get("mode") or "unknown").lower()
-
-    return jsonify({
-        "automaticRecoveryEnabled": recovery_enabled,
-        "autoLiveAfterPiReboot": load_live_preference(),
-        "liveAuthorized": authorized,
-        "livePending": pending,
-        "recoveryBlocked": blocked,
-        "recoveryBlockReason": reason,
-        "recoveryAttempts": attempts,
-        "safeRecoveryDelaySeconds": RECOVERY_SAFE_DELAY_SECONDS,
-        "connected": connected,
-        "mode": mode
-    })
+        online = arduino_online_locked()
+        pi_seen = state.get("piSeenByArduino")
+    return jsonify({"connected": connected, "mode": mode,
+                    "arduinoOnline": online, "piSeenByArduino": pi_seen})
 
 
 # ============================================================
@@ -1068,21 +852,16 @@ def serial_worker():
                 process_message(line)
             elif (last_rx_mono is not None and
                   time.monotonic() - last_rx_mono > ARDUINO_RX_TIMEOUT_SECONDS):
-                print("[ARDUINO] No serial RX for 15 seconds; reconnecting in SAFE state", flush=True)
-                # Silence is not a verified SAFE-to-LIVE transition. Never
-                # reactivate relays automatically after losing telemetry.
-                with recovery_lock:
-                    recovery_block("ARDUINO_TELEMETRY_TIMEOUT")
-                invalidate_bypass_on_serial_loss()
+                print("[ARDUINO] No serial RX for 15 seconds; reconnecting", flush=True)
+                # The Arduino keeps automatic control by itself.
+                pause_bypass_on_serial_loss()
                 disconnect_arduino()
                 active_connection = None
                 last_rx_mono = None
                 time.sleep(ARDUINO_RECONNECT_DELAY)
         except (serial.SerialException, OSError, AttributeError) as error:
             print(f"[ARDUINO] Serial error: {error}", flush=True)
-            with recovery_lock:
-                recovery_block("ARDUINO_SERIAL_ERROR")
-            invalidate_bypass_on_serial_loss()
+            pause_bypass_on_serial_loss()
             disconnect_arduino()
             active_connection = None
             last_rx_mono = None
@@ -1394,7 +1173,7 @@ def apply_confirmed_stage_to_arduino(target_stage):
     target = str(target_stage or "").strip().upper()
     with state_lock:
         current = str(state.get("stage") or "").strip().upper()
-        connected = state.get("connected") is True
+        connected = controller_ready_locked()
     if target not in ("STARTER", "GROWER", "FINISHER") or current not in ("STARTER", "GROWER", "FINISHER") or target == current:
         return {"success": False, "status": "invalid_or_same_stage"}
     if not AI_AUTO_STAGE_TRANSITIONS or not connected or bypass_active():
@@ -1829,6 +1608,7 @@ bypass_lock = threading.RLock()
 bypass_token = None
 bypass_expires = 0.0
 bypass_paused = False  # authenticated session retained; Arduino manual bypass disabled
+bypass_connection_lost_at = None  # UTC timestamp of the serial loss that paused bypass
 # A maintenance login survives page navigation and browser refresh.
 # Server-side expiration remains enforced; logout/exit revokes immediately.
 BYPASS_SESSION_SECONDS = 8 * 60 * 60
@@ -1938,9 +1718,9 @@ def simulation_start_analysis():
         with feeding_lock:
             feeding_busy = feeding_pending is not None or any(g.get("status")=="DISPENSING" for g in feeding_gates.values())
         with state_lock:
-            mode = str(state.get("mode") or "").lower()
-        if not connected or mode != "live" or feeding_busy:
-            error = "Hardware must be connected in LIVE mode with no active feeding session"
+            online = arduino_online_locked()
+        if not connected or not online or feeding_busy:
+            error = "Hardware must be connected and online with no active feeding session"
             with bypass_lock:
                 simulation_state["hardwareTransitionStatus"] = "blocked"
                 simulation_state["hardwareTransitionError"] = error
@@ -1993,27 +1773,31 @@ def bypass_authorized():
 def bypass_active():
     with bypass_lock: return bool(bypass_token and time.monotonic()<bypass_expires and not bypass_paused)
 
-def invalidate_bypass_on_serial_loss():
-    # Never retain a maintenance token after losing Arduino telemetry.
-    # Do not send relay commands over a broken connection.
-    global bypass_token, bypass_expires, bypass_paused
+def pause_bypass_on_serial_loss():
+    # Keep the login (token + expiry) but pause manual control. The Arduino's
+    # own 10 s maintenance timeout has returned it to automatic control.
+    # Nothing is sent over the broken link; Resume re-sends BYPASS:ON.
+    global bypass_paused, bypass_connection_lost_at
     with bypass_lock:
-        bypass_token = None
-        bypass_expires = 0.0
-        bypass_paused = False
+        if not bypass_token:
+            return
+        bypass_paused = True
+        bypass_connection_lost_at = utc_timestamp()
         for key in bypass_overrides:
             bypass_overrides[key] = None
-    with bypass_lock:
-        for key in sim_readings: sim_readings[key] = None
+        for key in sim_readings:
+            sim_readings[key] = None
+    print("[BYPASS] Serial lost; manual control paused (session kept)", flush=True)
+    cancel_schedule_test()
     simulation_clear()
     bypass_ack_event.set()  # Unblock an in-flight request; it will fail ACK check.
 
 def bypass_shutdown():
-    global bypass_token,bypass_expires,bypass_paused
+    global bypass_token,bypass_expires,bypass_paused,bypass_connection_lost_at
     send_command("FEED:STOP")
     bypass_send_confirmed("BYPASS:OFF", "BYPASS_ACK:OFF")
     with bypass_lock:
-        bypass_token=None;bypass_expires=0.0;bypass_paused=False
+        bypass_token=None;bypass_expires=0.0;bypass_paused=False;bypass_connection_lost_at=None
         for key in bypass_overrides:bypass_overrides[key]=None
     with bypass_lock:
         for key in sim_readings: sim_readings[key] = None
@@ -2029,7 +1813,7 @@ def bypass_watchdog():
 
 @app.route("/api/bypass/login",methods=["POST"])
 def bypass_login():
-    global bypass_token,bypass_expires,bypass_paused
+    global bypass_token,bypass_expires,bypass_paused,bypass_connection_lost_at
     if not BYPASS_SECRET or len(BYPASS_SECRET)<4:
         return jsonify(error="Configure POULTRIX_BYPASS_SECRET (4+ characters) on the Pi"),503
     value=str((request.get_json(silent=True) or {}).get("password", ""))
@@ -2039,7 +1823,7 @@ def bypass_login():
     if not bypass_send_confirmed("BYPASS:ON", "BYPASS_ACK:ON"):
         return jsonify(error="Arduino did not confirm maintenance mode"),503
     with bypass_lock:
-        bypass_token=secrets.token_urlsafe(32);bypass_expires=time.monotonic()+BYPASS_SESSION_SECONDS;bypass_paused=False
+        bypass_token=secrets.token_urlsafe(32);bypass_expires=time.monotonic()+BYPASS_SESSION_SECONDS;bypass_paused=False;bypass_connection_lost_at=None
         token=bypass_token
     return jsonify(token=token,expiresSeconds=BYPASS_SESSION_SECONDS)
 
@@ -2137,9 +1921,10 @@ def bypass_status():
         overrides=dict(bypass_overrides)
         readings=dict(sim_readings)
         readings_at=sim_last_updated
+        lost_at=bypass_connection_lost_at
     with state_lock:
         relays=list(state.get("fans", [False]*4)) + [bool(state.get("led",False))] + list(state.get("heaters",[False]*2))[:1]
-    return jsonify(active=not bypass_paused,maintenanceAuthenticated=True,manualControlsPaused=bypass_paused,expiresSeconds=remaining,overrides=overrides,readings=readings,readingsUpdatedAt=readings_at,relays=relays,simulation=simulation_snapshot())
+    return jsonify(active=not bypass_paused,maintenanceAuthenticated=True,manualControlsPaused=bypass_paused,connectionLostAt=lost_at,expiresSeconds=remaining,overrides=overrides,readings=readings,readingsUpdatedAt=readings_at,relays=relays,simulation=simulation_snapshot())
 
 @app.route("/api/bypass/action",methods=["POST"])
 def bypass_action():
@@ -2250,17 +2035,12 @@ def bypass_return_live():
         for key in sim_readings: sim_readings[key] = None
     cancel_schedule_test()
     simulation_clear()
-    with state_lock:
-        already_live = state.get("connected") is True and state.get("mode") == "live"
-    if already_live:
-        return jsonify(success=True,status="live",maintenanceAuthenticated=True,manualControlsPaused=True),200
-    # SAFE remains SAFE until explicitly authorized and acknowledged; never fake LIVE.
-    return jsonify(success=True,status="safe_or_unknown",maintenanceAuthenticated=True,
-                   manualControlsPaused=True,message="Overrides cleared. Select LIVE in system controls if safe to do so."),200
+    # BYPASS_ACK:OFF means the Arduino is back under automatic control.
+    return jsonify(success=True,status="automatic",maintenanceAuthenticated=True,manualControlsPaused=True),200
 
 @app.route("/api/bypass/resume",methods=["POST"])
 def bypass_resume():
-    global bypass_paused, bypass_expires
+    global bypass_paused, bypass_expires, bypass_connection_lost_at
     if not bypass_authorized(): return jsonify(error="Unauthorized"),403
     with bypass_lock:
         if not bypass_paused:
@@ -2269,6 +2049,7 @@ def bypass_resume():
         return jsonify(error="Arduino did not confirm manual bypass"),503
     with bypass_lock:
         bypass_paused = False
+        bypass_connection_lost_at = None
         bypass_expires = time.monotonic() + BYPASS_SESSION_SECONDS
     return jsonify(success=True,manualControlsPaused=False)
 
@@ -2354,9 +2135,13 @@ def get_status():
         fresh = (datetime.now(timezone.utc) - stamp).total_seconds() < ARDUINO_RX_TIMEOUT_SECONDS
     except (ValueError, TypeError):
         pass
+    # Always automatic: LIVE means connected, fresh telemetry and healthy.
+    # The always-live firmware always reports MODE_STATUS:LIVE; the mode check
+    # stays so old SAFE-first firmware (now never switched to LIVE) shows OFFLINE.
     live = (result.get("connected") is True and fresh
             and str(result.get("mode", "")).lower() == "live"
             and result.get("systemHealth") in ("OK", "READY"))
+    result["arduinoOnline"] = result.get("connected") is True and fresh
     result["operatingStatus"] = "LIVE" if live else "OFFLINE"
     result["telemetryFresh"] = fresh
     result["maintenanceActive"] = bypass_active()
@@ -2465,42 +2250,14 @@ def manual_ai_classification():
 
 
 # ============================================================
-# API: TEST MODE
+# API: MODE SWITCHING (REMOVED)
 # ============================================================
 
-@app.route("/api/mode/test", methods=["POST"])
+@app.route("/api/mode/live", methods=["POST"])
 @app.route("/api/mode/safe", methods=["POST"])
+@app.route("/api/mode/test", methods=["POST"])
 def retired_mode_switch():
-    return jsonify(success=False, error="SAFE/TEST mode selection removed. LIVE operation is automatic; faults are reported as OFFLINE."), 410
-
-
-# ============================================================
-# API: LIVE MODE
-# ============================================================
-
-@app.route(
-    "/api/mode/live",
-    methods=["POST"]
-)
-def enable_live_mode():
-    global recovery_authorized, recovery_live_pending, recovery_token
-    global recovery_blocked, recovery_block_reason, recovery_pending_since
-    with recovery_lock:
-        with state_lock:
-            connected = state.get("connected") is True
-        if not connected:
-            return jsonify({"success": False, "error": "Arduino not connected"}), 503
-        recovery_authorized = False
-        recovery_blocked = False
-        recovery_block_reason = None
-        recovery_event.clear()
-        recovery_token = secrets.token_hex(16)
-        recovery_live_pending = True
-        recovery_pending_since = time.monotonic()
-        if not send_command("MODE:LIVE:" + recovery_token):
-            recovery_block("MANUAL_LIVE_SEND_FAILED")
-            return jsonify({"success": False, "error": "Arduino unavailable"}), 503
-    return jsonify({"success": True, "message": "Live mode command sent; awaiting Arduino acknowledgment"}), 202
+    return jsonify(success=False, error="Mode switching removed; Poultrix is always automatic"), 410
 
 
 # ============================================================
@@ -2698,19 +2455,12 @@ def get_sensor_check_status():
 def check_live_sensors():
     with state_lock:
         connected = state.get("connected") is True
-        mode = str(state.get("mode") or "").lower()
 
     if not connected:
         return jsonify({
             "success": False,
             "error": "Arduino not connected"
         }), 503
-
-    if mode != "safe":
-        return jsonify({
-            "success": False,
-            "error": "Arduino must be in SAFE mode"
-        }), 409
 
     if not send_command("SENSOR:CHECK"):
         return jsonify({
@@ -2884,9 +2634,9 @@ def feeding_dispense():
     # Supervised, bounded pulse only. No automatic schedule or multi-pulse batching.
     # Calibration is a time-based estimate, NOT a reliable weight-based cutoff.
     with state_lock:
-        ready = state.get("connected") is True and state.get("mode") == "live" and state.get("systemHealth") in ("OK", "READY")
+        ready = controller_ready_locked()
     if not ready or bypass_active():
-        return jsonify(success=False,error="LIVE healthy hardware required; maintenance must be inactive"),423
+        return jsonify(success=False,error="Online, healthy hardware (Pi seen by Arduino) required; maintenance must be inactive"),423
     if not (100 <= duration <= 1500):
         return jsonify(success=False,error="Pulse must be between 100 and 1500 ms"),400
     # Continue to the single-pulse serial dispatch below.
@@ -2948,7 +2698,7 @@ def internet_available():
 def evaluate_system_health():
     with state_lock:
         arduino_ok = bool(state["connected"] and state.get("lastSeen"))
-        live_mode = state["mode"] == "live"
+        live_mode = True  # always automatic
         dht_status = state.get("dht22Status")
         arduino_report = state.get("systemHealth")
 
@@ -3180,12 +2930,10 @@ def _feed_inputs(target, compartment):
     """Full-target timed dispensing; trough sensor is informational only."""
     import math
     with state_lock:
-        connected = state.get("connected") is True
-        mode = state.get("mode")
-        health = state.get("systemHealth")
+        ready = controller_ready_locked()
         record = dict(state.get("troughWeight") or {})
-    if not connected or mode != "live" or health not in ("OK", "READY") or bypass_active():
-        raise RuntimeError("LIVE healthy hardware and inactive maintenance required")
+    if not ready or bypass_active():
+        raise RuntimeError("Online healthy hardware and inactive maintenance required")
     rate = FEED_RATES.get(compartment)
     if not isinstance(rate, (int, float)) or not math.isfinite(rate) or rate <= 0:
         raise RuntimeError("Invalid dispensing rate")
@@ -3215,12 +2963,11 @@ def _feed_job_run(compartment, target, source, calculation):
         while remaining_ms > 0:
             if feed_job_stop.is_set():
                 raise RuntimeError("Stopped by operator")
-            # Never continue a job if the controller falls back to SAFE mode.
+            # Never continue a job if the controller goes offline or unhealthy.
             with state_lock:
-                healthy = (state.get("connected") is True and state.get("mode") == "live"
-                           and state.get("systemHealth") in ("OK", "READY"))
+                healthy = controller_ready_locked()
             if not healthy or bypass_active():
-                raise RuntimeError("LIVE state lost during dispensing")
+                raise RuntimeError("Controller not ready during dispensing")
             ms = min(10000, remaining_ms)
             with feeding_lock:
                 if feeding_pending is not None or any(g.get("status") in ("DISPENSING", "STARTED") for g in feeding_gates.values()):
@@ -3241,8 +2988,8 @@ def _feed_job_run(compartment, target, source, calculation):
                 if gate.get("status") == "COMPLETED":
                     break
                 with state_lock:
-                    if state.get("mode") != "live" or state.get("connected") is not True:
-                        raise RuntimeError("LIVE state lost during gate operation")
+                    if not arduino_online_locked() or state.get("piSeenByArduino") is False:
+                        raise RuntimeError("Controller offline during gate operation")
                 time.sleep(.05)
             else:
                 raise RuntimeError("Gate completion was not confirmed")
@@ -3441,7 +3188,7 @@ def process_message(message):
         _history_insert("feed_events",
             ["recorded_at","gate","event_type","duration_ms","estimated_dispensed_grams","stage","message"],
             [utc_timestamp(),None,"ERROR",None,None,None,message])
-    elif message.startswith(("MODE_STATUS:","WATCHDOG:","SYSTEM_ERROR:")):
+    elif message.startswith(("BOOT:","PI:","WATCHDOG:","SYSTEM_ERROR:")):
         _history_insert("system_events",["recorded_at","event_type","detail"],
                         [utc_timestamp(),message.split(":",1)[0],message.split(":",1)[1]])
 
@@ -3677,12 +3424,6 @@ if __name__ == "__main__":
         daemon=True
     )
     heartbeat_thread.start()
-
-    recovery_thread = threading.Thread(
-        target=arduino_recovery_worker,
-        daemon=True
-    )
-    recovery_thread.start()
 
     health_thread = threading.Thread(
         target=system_health_worker,
