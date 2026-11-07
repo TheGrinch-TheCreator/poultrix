@@ -35,18 +35,17 @@ DHT dht(DHT_PIN, DHT_TYPE);
 
 
 // ============================================================
-// MODES
+// OPERATION
 // ============================================================
-
-enum SystemMode {
-  TEST_MODE,
-  LIVE_MODE,
-  SAFE_MODE
-};
-
-SystemMode currentMode = SAFE_MODE;
+// Single automatic mode (always-live): temperature and lighting control
+// always run, including when the Raspberry Pi is offline. There is no
+// SAFE or TEST mode. The Pi heartbeat (SYS:PING) only gates feeding and
+// the "Pi offline" indicator.
+bool piOnline = false;  // set by SYS:PING; cleared by the heartbeat watchdog
+const uint8_t GATE_COUNT = 2;  // feed compartments (gates) 1 and 2
+extern unsigned long lastSensorRead;  // defined in TIMING below
 const bool AUTOMATIC_FEEDING_ENABLED = false; // Unattended scheduling stays disabled.
-const bool MANUAL_FEEDING_ENABLED = true; // Only accepted in LIVE, outside maintenance.
+const bool MANUAL_FEEDING_ENABLED = true; // Only accepted while the Pi is online, outside maintenance.
 // Maintenance supports manual heater relay on D28; physical thermal protection required.
 bool lcdSimTemperature = false, lcdSimHopper = false;
 float lcdSimTempC = 0.0f, lcdSimHopperG = 0.0f;
@@ -54,14 +53,17 @@ bool maintenanceActive = false;
 unsigned long maintenanceLastPing = 0;
 const unsigned long MAINTENANCE_TIMEOUT_MS = 10000UL;
 void maintenanceOff() {
+  // Leave manual bypass and hand the outputs straight back to automatic
+  // control. Never switch everything off just because maintenance ended.
   maintenanceActive = false;
   lcdSimTemperature = false;
   lcdSimHopper = false;
   stopGroups();
-  setFans(false,false,false,false);
-  setHeaters(false,false);
-  setLED(false);
-  for (uint8_t i=0;i<3;i++) closeGate(i,"STOPPED");
+  for (uint8_t i = 0; i < GATE_COUNT; i++) closeGate(i, "STOPPED");
+  readLiveSensors();
+  controlTemperature();
+  controlLiveLighting();
+  lastSensorRead = millis();
 }
 
 
@@ -108,9 +110,6 @@ void saveCurrentStage() {
 
 float temperature = 27.0;
 float humidity = 0.0;
-
-// Test Mode simulated lux
-float testLux = 15.0;
 
 // Live hardware readings
 int lightRaw = 0;
@@ -163,28 +162,23 @@ unsigned long lastHeartbeat = 0;
 // Use an external regulated servo power supply and common ground.
 // Test physical gate movement without feed before enabling dispensing.
 // ============================================================
-// PCA9685 channels 0,1,2 are feed gates 1,2,3.
-int GATE_CLOSED[3] = {0, 0, 0}; // Legacy calibration, group gates use GROUP_CLOSED
-const int GATE_OPEN[3] = {90, 90, 90};
-const float GATE_RATE[3] = {22.2222f, 18.6667f, 20.0f}; // estimated g/s
+// Two feed compartments ("gates" 1 and 2), each five synchronized servos.
+int GATE_CLOSED[GATE_COUNT] = {0, 0};
+const int GATE_OPEN[GATE_COUNT] = {90, 90};
 const unsigned long GATE_MAX_MS = 10000UL;
 extern bool groupRunning;
-bool gateActive[3] = {false, false, false};
-unsigned long gateStart[3] = {0, 0, 0};
-unsigned long gateDuration[3] = {0, 0, 0};
-const char* gateLastStatus[3] = {"CLOSED", "CLOSED", "CLOSED"};
+bool gateActive[GATE_COUNT] = {false, false};
+unsigned long gateStart[GATE_COUNT] = {0, 0};
+unsigned long gateDuration[GATE_COUNT] = {0, 0};
+const char* gateLastStatus[GATE_COUNT] = {"CLOSED", "CLOSED"};
 
 void setPcaAngle(uint8_t channel, int angle);
 void setGateAngle(uint8_t gate, int angle) {
-  if (gate >= 3) return;
+  if (gate >= GATE_COUNT) return;
   // Feeding compartments consist of five synchronized PCA9685 servos each.
   // Compartment 1: channels 0-4; compartment 2: channels 11-15.
-  if (gate < 2) {
-    for (uint8_t j=0; j<5; j++)
-      setPcaAngle(gate == 0 ? j : 11+j, angle);
-  } else {
-    setPcaAngle(gate, angle); // Legacy third gate is never dispensed.
-  }
+  for (uint8_t j=0; j<5; j++)
+    setPcaAngle(gate == 0 ? j : 11+j, angle);
 }
 
 void emitGateStatus(uint8_t gate, const char* status) {
@@ -205,7 +199,7 @@ void closeGate(uint8_t gate, const char* status) {
 
 void updateFeedGates() {
   unsigned long now = millis();
-  for (uint8_t i = 0; i < 2; i++) {
+  for (uint8_t i = 0; i < GATE_COUNT; i++) {
     if (gateActive[i] && now - gateStart[i] >= gateDuration[i]) {
       closeGate(i, "COMPLETED");
     }
@@ -213,7 +207,7 @@ void updateFeedGates() {
 }
 
 void reportFeedGates() {
-  for (uint8_t i = 0; i < 3; i++) {
+  for (uint8_t i = 0; i < GATE_COUNT; i++) {
     emitGateStatus(i, gateActive[i] ? "DISPENSING" : gateLastStatus[i]);
   }
 }
@@ -237,7 +231,7 @@ bool handleFeedCommand(String command) {
     }
     long angle = degrees.toInt();
     if (angle < 0 || angle > 180) { Serial.println("FEED_ERROR:INVALID_ANGLE"); return true; }
-    for (uint8_t j = 0; j < 3; j++) {
+    for (uint8_t j = 0; j < GATE_COUNT; j++) {
       if (gateActive[j] || groupRunning) { Serial.println("FEED_ERROR:BUSY"); return true; }
     }
     uint8_t gate = id[0] - '1';
@@ -250,11 +244,15 @@ bool handleFeedCommand(String command) {
   if (command == "FEED:STATUS") { reportFeedGates(); return true; }
   if (command == "FEED:STOP") {
     stopGroups(); // Stop either compartment group as well as normal feeding
-    for (uint8_t i = 0; i < 3; i++) closeGate(i, "STOPPED");
+    for (uint8_t i = 0; i < GATE_COUNT; i++) closeGate(i, "STOPPED");
     return true;
   }
   if (!command.startsWith("FEED:DISPENSE:")) return false;
-  if (!MANUAL_FEEDING_ENABLED || currentMode != LIVE_MODE || maintenanceActive || groupRunning) {
+  if (!piOnline) {
+    Serial.println(F("FEED_ERROR:PI_OFFLINE"));
+    return true;
+  }
+  if (!MANUAL_FEEDING_ENABLED || maintenanceActive || groupRunning) {
     Serial.println(F("FEED_ERROR:DISABLED"));
     return true;
   }
@@ -273,7 +271,7 @@ bool handleFeedCommand(String command) {
   unsigned long ms = msText.toInt();
   if (ms == 0 || ms > GATE_MAX_MS) { Serial.println("FEED_ERROR:INVALID_DURATION"); return true; }
   uint8_t i = idText[0] - '1';
-  for (uint8_t j = 0; j < 3; j++) {
+  for (uint8_t j = 0; j < GATE_COUNT; j++) {
     if (gateActive[j]) { Serial.println("FEED_ERROR:BUSY"); return true; }
   }
   gateDuration[i] = ms;
@@ -369,7 +367,7 @@ bool handleGroupCommand(const String &command) {
     return true;
   }
   if (!command.startsWith("BYPASS:GROUP:")) return false;
-  if (!maintenanceActive || (currentMode != SAFE_MODE && currentMode != LIVE_MODE)) {
+  if (!maintenanceActive) {
     Serial.println(F("BYPASS_ERROR:NOT_ACTIVE")); return true;
   }
   if (groupRunning || gateActive[0] || gateActive[1]) { Serial.println(F("BYPASS_ERROR:BUSY")); return true; }
@@ -385,7 +383,7 @@ bool handleGroupCommand(const String &command) {
   }
   unsigned long ms=duration.toInt();
   if (ms<100 || ms>GROUP_MAX_MS) { Serial.println(F("BYPASS_ERROR:INVALID_DURATION")); return true; }
-  for (uint8_t i=0;i<3;i++) if (gateActive[i]) {
+  for (uint8_t i=0;i<GATE_COUNT;i++) if (gateActive[i]) {
     Serial.println(F("BYPASS_ERROR:FEED_BUSY")); return true;
   }
   uint8_t g=args[0]-'1';
@@ -404,7 +402,8 @@ String getStageName();
 void updateLCD() {
   if (millis() - lastLCDUpdate < LCD_UPDATE_MS) return;
   lastLCDUpdate = millis();
-  lcdLine(0, F("POULTRIX MONITOR"));
+  if (piOnline) lcdLine(0, F("POULTRIX MONITOR"));
+  else lcdLine(0, F("Pi: OFFLINE"));
   lcdLine(1, String(F("Stage: ")) + getStageName());
   long raw;
   if (lcdSimHopper) {
@@ -440,11 +439,9 @@ bool handlePcaCommand(const String &command) {
   long n=id.toInt(), a=deg.toInt();
   if (n<1 || n>10 || a<0 || a>180) { Serial.println(F("SERVO_ERROR:RANGE")); return true; }
   // Gate channels 1-3 remain under the existing FEED command safety logic.
-  if (n<=3) { Serial.println(F("SERVO_ERROR:USE_FEED_ANGLE_FOR_GATES")); return true; }
-  if (currentMode != TEST_MODE || maintenanceActive || groupRunning) { Serial.println(F("SERVO_ERROR:TEST_MODE_REQUIRED")); return true; }
-  const uint8_t channel = GROUP_CHANNELS[(n-1)/5][(n-1)%5];
-  setPcaAngle(channel, a);
-  Serial.print(F("SERVO_OK:")); Serial.print(n); Serial.print(','); Serial.println(a);
+  // Individual servo jogging belonged to the retired TEST mode.
+  (void)n; (void)a;
+  Serial.println(F("ERROR:MODE_REMOVED"));
   return true;
 }
 
@@ -474,7 +471,7 @@ void updateSystemIndicators() {
   unsigned long now = millis();
   bool timedOut = lastPiHeartbeat && (now - lastPiHeartbeat > HEALTH_TIMEOUT_MS);
   bool starting = !lastPiHeartbeat && now < STARTUP_TIMEOUT_MS;
-  bool healthy = piReady && !piFault && !timedOut;
+  bool healthy = piOnline && piReady && !piFault && !timedOut;
   digitalWrite(GREEN_STATUS_LED, healthy ? HIGH : LOW);
   digitalWrite(YELLOW_STATUS_LED,
     healthy ? LOW : (starting ? ((now / 500) % 2 ? HIGH : LOW) : HIGH));
@@ -530,7 +527,8 @@ void setup() {
   stopGroups();
 
   // ----------------------------------------------------------
-  // SAFE STARTUP
+  // STARTUP: all relays OFF until the first valid sensor reading,
+  // then automatic control takes over (no SAFE mode).
   // ACTIVE LOW RELAYS
   //
   // HIGH = OFF
@@ -567,7 +565,7 @@ void setup() {
 
   delay(1000);
 
-  Serial.println(F("BOOT:SAFE"));
+  Serial.println(F("BOOT:AUTO"));
   reportStatus();
   reportFeedGates();
 }
@@ -587,24 +585,15 @@ void loop() {
     reportStatus();
   }
 
-  // Enter SAFE if Raspberry Pi heartbeats stop during LIVE.
-  if (
-    currentMode == LIVE_MODE &&
-    millis() - lastHeartbeat >= WATCHDOG_TIMEOUT_MS
-  ) {
-    currentMode = SAFE_MODE;
+  // Pi heartbeat lost: keep automatic climate control running with the
+  // current stage targets. Only stop feeding and report the Pi offline.
+  if (piOnline && millis() - lastHeartbeat >= WATCHDOG_TIMEOUT_MS) {
+    piOnline = false;
     stopGroups();
-
-    setFans(false, false, false, false);
-    setHeaters(false, false);
-    setLED(false);
-
-    for (uint8_t i = 0; i < 3; i++) {
-      closeGate(i, "STOPPED");
+    for (uint8_t i = 0; i < GATE_COUNT; i++) {
+      if (gateActive[i]) closeGate(i, "STOPPED");
     }
-
-    Serial.println(F("WATCHDOG:TIMEOUT"));
-    Serial.println(F("MODE_OK:SAFE"));
+    Serial.println(F("PI:OFFLINE"));
     reportStatus();
   }
 
@@ -614,18 +603,14 @@ void loop() {
   updateLCD();
 
 
-  // Continue physical DHT22/LDR monitoring in SAFE and LIVE.
-  // Only LIVE may run automatic actuator controls.
-  if (currentMode == LIVE_MODE || currentMode == SAFE_MODE) {
-    if (millis() - lastSensorRead >= SENSOR_INTERVAL) {
-      lastSensorRead = millis();
-      readLiveSensors();
-      if (currentMode == LIVE_MODE) {
-        controlTemperature();
-        controlLiveLighting();
-      }
-      reportStatus();
-    }
+  // Automatic control always runs (maintenance suspends it inside the
+  // control functions themselves).
+  if (millis() - lastSensorRead >= SENSOR_INTERVAL) {
+    lastSensorRead = millis();
+    readLiveSensors();
+    controlTemperature();
+    controlLiveLighting();
+    reportStatus();
   }
 
 }
@@ -841,15 +826,9 @@ void controlTemperature() {
   // Manual bypass owns relay outputs until explicitly exited or timed out.
   if (maintenanceActive) return;
 
-  // LIVE-first: stage simulation does not suspend physical environmental control.
-  // DHT22 validity and internal fault protections still apply.
-  if (currentMode == SAFE_MODE) {
-    setHeaters(false, false);
-    setFans(false, false, false, false);
-    return;
-  }
-
-  if (currentMode == LIVE_MODE && !dhtReadingValid) {
+  // Fault response (not a mode): without a valid DHT22 reading the
+  // heater and fans are switched off until the next valid reading.
+  if (!dhtReadingValid) {
     setHeaters(false, false);
     setFans(false, false, false, false);
     return;
@@ -992,11 +971,6 @@ const float LIGHT_THRESHOLD_LUX = 50.0f;
 
 void controlLiveLighting() {
   if (maintenanceActive) return;
-  // Bypass stage simulation must not stop real LDR-driven lighting.
-  if (currentMode != LIVE_MODE) {
-    if (currentMode == SAFE_MODE) setLED(false);
-    return;
-  }
   // Heater lamps provide light: keep the separate LED off while heating.
   if (heater1State || heater2State) {
     if (ledState) setLED(false);
@@ -1015,33 +989,6 @@ void controlLiveLighting() {
   }
 }
 
-// ============================================================
-// TEST MODE LIGHTING CONTROL
-// ============================================================
-
-void controlTestLighting() {
-  if (maintenanceActive) return;
-
-
-  // Too dark
-
-  if (testLux < luxMin) {
-
-    setLED(true);
-  }
-
-
-  // Bright enough
-
-  else if (testLux >= luxMax) {
-
-    setLED(false);
-  }
-
-
-  // Between luxMin and luxMax:
-  // Keep previous LED state
-}
 
 
 // ============================================================
@@ -1147,6 +1094,10 @@ void handleSerialCommands() {
 
   if (command == "SYS:PING") {
     lastHeartbeat = millis();
+    if (!piOnline) {
+      piOnline = true;
+      Serial.println(F("PI:ONLINE"));
+    }
     return;
   }
 
@@ -1173,12 +1124,10 @@ void handleSerialCommands() {
   }
   if (command == "BYPASS:ON") {
     // Preserve current low-voltage fan/LED states when entering bypass.
-    // Disable automatic control and keep mains heaters OFF.
-    // Maintenance is independent of LIVE/SAFE operating mode.
-    // Suspend automatic outputs while manual control is active.
-    // Do not switch LIVE to SAFE just to unlock maintenance.
+    // Suspend automatic control and keep the mains heater OFF on entry.
+    // Leaving bypass (BYPASS:OFF or ping timeout) returns to automatic control.
     setHeaters(false,false);
-    for (uint8_t i=0;i<3;i++) closeGate(i,"STOPPED");
+    for (uint8_t i=0;i<GATE_COUNT;i++) closeGate(i,"STOPPED");
     stopGroups();
     maintenanceActive = true;
     maintenanceLastPing = millis();
@@ -1197,7 +1146,7 @@ void handleSerialCommands() {
     return;
   }
   if (command.startsWith("BYPASS:RELAY:")) {
-    if (!maintenanceActive || (currentMode != SAFE_MODE && currentMode != LIVE_MODE)) {
+    if (!maintenanceActive) {
       Serial.println(F("BYPASS_ERROR:NOT_ACTIVE")); return;
     }
     String args = command.substring(13);
@@ -1223,121 +1172,10 @@ void handleSerialCommands() {
     return;
   }
 
-  if (command == "MODE:SAFE") {
-    maintenanceOff();
-    currentMode = SAFE_MODE;
-    stopGroups();
-    setFans(false, false, false, false);
-    setHeaters(false, false);
-    setLED(false);
-    for (uint8_t i = 0; i < 3; i++) {
-      closeGate(i, "STOPPED");
-    }
-    Serial.println(F("MODE_OK:SAFE"));
-    reportStatus();
-    return;
-  }
-
-
-  // ==========================================================
-  // SWITCH TO TEST MODE
-  // ==========================================================
-
-  if (command == "MODE:TEST") {
-
-    currentMode = SAFE_MODE;
-    setFans(false, false, false, false);
-    setHeaters(false, false);
-    setLED(false);
-    Serial.println(F("ERROR:TEST_MODE_DISABLED"));
-    reportStatus();
-    return;
-    currentMode = TEST_MODE;
-
-
-    Serial.println(
-      "MODE_OK:TEST"
-    );
-
-
-    // Apply current test values
-
-    controlTemperature();
-
-    controlTestLighting();
-
-
-    reportStatus();
-
-    return;
-  }
-
-
-  // ==========================================================
-  // SWITCH TO LIVE MODE
-  // ==========================================================
-
-  // Tokened LIVE commands prevent stale acknowledgments authorizing recovery.
-  // Legacy MODE:LIVE remains available for older clients.
-  if (command == "MODE:LIVE" || command.startsWith("MODE:LIVE:")) {
-    String liveToken = "";
-    if (command.startsWith("MODE:LIVE:")) {
-      liveToken = command.substring(10);
-      if (liveToken.length() != 32) {
-        Serial.println(F("ERROR:INVALID_LIVE_TOKEN"));
-        return;
-      }
-      for (unsigned int j = 0; j < liveToken.length(); j++) {
-        char c = liveToken.charAt(j);
-        if (!isHexadecimalDigit(c)) {
-          Serial.println(F("ERROR:INVALID_LIVE_TOKEN"));
-          return;
-        }
-      }
-    }
-
-    maintenanceOff();
-    currentMode = SAFE_MODE;
-    setFans(false, false, false, false);
-    setHeaters(false, false);
-    setLED(false);
-    readLiveSensors();
-    if (!dhtReadingValid) {
-      Serial.println(F("ERROR:DHT22_NOT_READY"));
-      reportStatus();
-      return;
-    }
-    lastHeartbeat = millis();
-    currentMode = LIVE_MODE;
-
-
-    if (liveToken.length()) {
-      Serial.print(F("MODE_ACK:LIVE:"));
-      Serial.println(liveToken);
-    } else {
-      Serial.println(F("MODE_OK:LIVE"));
-    }
-
-
-    // Immediately read real hardware
-
-    readLiveSensors();
-
-
-    // Immediately apply automatic control
-
-    controlTemperature();
-
-    controlLiveLighting();
-
-
-    reportStatus();
-
-
-    lastSensorRead =
-      millis();
-
-
+  // Operating modes were removed (always-live). Reject any MODE:* command
+  // without changing outputs.
+  if (command.startsWith("MODE:")) {
+    Serial.println(F("ERROR:MODE_REMOVED"));
     return;
   }
 
@@ -1347,16 +1185,10 @@ void handleSerialCommands() {
   // ==========================================================
 
   // ----------------------------------------------------------
-  // SENSOR CHECK - AVAILABLE IN SAFE MODE
-  // Reads sensors without activating environmental controls.
+  // SENSOR CHECK - read-only, available at any time
   // ----------------------------------------------------------
 
   if (command == "SENSOR:CHECK") {
-
-    if (currentMode != SAFE_MODE) {
-      Serial.println(F("SENSOR_CHECK:NOT_SAFE"));
-      return;
-    }
 
     readLiveSensors();
 
@@ -1395,76 +1227,9 @@ void handleSerialCommands() {
   }
 
 
-  // ==========================================================
-  // TEST TEMPERATURE
-  // ==========================================================
-
-  if (
-    command.startsWith("TEMP:")
-  ) {
-
-    if (
-      currentMode != TEST_MODE
-    ) {
-
-      Serial.println(
-        "ERROR:TEST_MODE_REQUIRED"
-      );
-
-      return;
-    }
-
-
-    String value =
-      command.substring(5);
-
-
-    temperature =
-      value.toFloat();
-
-
-    controlTemperature();
-
-
-    reportStatus();
-
-    return;
-  }
-
-
-  // ==========================================================
-  // TEST LUX
-  // ==========================================================
-
-  if (
-    command.startsWith("LUX:")
-  ) {
-
-    if (
-      currentMode != TEST_MODE
-    ) {
-
-      Serial.println(
-        "ERROR:TEST_MODE_REQUIRED"
-      );
-
-      return;
-    }
-
-
-    String value =
-      command.substring(4);
-
-
-    testLux =
-      value.toFloat();
-
-
-    controlTestLighting();
-
-
-    reportStatus();
-
+  // TEMP:/LUX: injected simulated readings in the retired TEST mode.
+  if (command.startsWith("TEMP:") || command.startsWith("LUX:")) {
+    Serial.println(F("ERROR:MODE_REMOVED"));
     return;
   }
 
@@ -1534,19 +1299,9 @@ void handleSerialCommands() {
     controlTemperature();
 
 
-    // Re-evaluate lighting depending on mode
+    // Re-evaluate lighting
 
-    if (
-      currentMode == TEST_MODE
-    ) {
-
-      controlTestLighting();
-    }
-
-    else {
-
-      controlLiveLighting();
-    }
+    controlLiveLighting();
 
 
     Serial.print(
@@ -1653,29 +1408,10 @@ void reportStatus() {
   // MODE
   // ==========================================================
 
-  Serial.print(
-    "MODE_STATUS:"
-  );
-
-
-  if (
-    currentMode == LIVE_MODE
-  ) {
-
-    Serial.println(
-      "LIVE"
-    );
-  }
-
-  else if (currentMode == SAFE_MODE) {
-
-    Serial.println("SAFE");
-  }
-
-  else {
-
-    Serial.println("TEST");
-  }
+  // Always "LIVE": kept for protocol compatibility (the Pi, UI and
+  // telemetry derive LIVE/OFFLINE from this line).
+  Serial.println(F("MODE_STATUS:LIVE"));
+  Serial.println(piOnline ? F("PI_STATUS:ONLINE") : F("PI_STATUS:OFFLINE"));
 
 
   // ==========================================================
@@ -1865,10 +1601,9 @@ void reportStatus() {
 
 
   // ==========================================================
-  // LIVE MODE DATA
+  // LIGHT SENSOR DATA
   // ==========================================================
 
-  if (currentMode == LIVE_MODE || currentMode == SAFE_MODE) {
 
     Serial.print(
       "LIGHT_RAW:"
@@ -1894,28 +1629,4 @@ void reportStatus() {
     Serial.println(
       "SENSOR_SOURCE:DHT22+LDR"
     );
-  }
-
-
-  // ==========================================================
-  // TEST MODE DATA
-  // ==========================================================
-
-  else {
-
-    Serial.print(
-      "LUX:"
-    );
-
-
-    Serial.println(
-      testLux,
-      1
-    );
-
-
-    Serial.println(
-      "SENSOR_SOURCE:TEST"
-    );
-  }
 }
