@@ -72,8 +72,9 @@ const ROUTES: readonly PiRoute[] = [
   { path: "/camera/stream", upstream: "/api/camera/stream", methods: GET, stream: true },
 ];
 
-/** Main app (Supabase login). Its bypass routes stay until maintenance-site M3. */
-export const APP_ROUTES: readonly PiRoute[] = ROUTES;
+/** Main app (Supabase login). No bypass routes: maintenance has its own
+ *  site and Worker (maintenance-site M3). */
+export const APP_ROUTES: readonly PiRoute[] = ROUTES.filter((route) => !route.maintenance);
 /** Maintenance site (bypass password only; SPEC-maintenance-site.md). */
 export const MAINTENANCE_ROUTES: readonly PiRoute[] = ROUTES.filter(
   (route) => route.maintenance || route.path === "/camera/stream" || route.path === "/snapshot",

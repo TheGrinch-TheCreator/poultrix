@@ -117,9 +117,6 @@ function SettingsPage() {
           <p className="mt-2 text-sm font-medium">Defaults use Philippine climate standards: Starter 32–34°C (first week), Grower 26–28°C, Finisher 24–26°C.</p>
         </Card>
       </div>
-      <div className="mt-8 text-center">
-        <a href="/bypass" className="text-[11px] text-muted-foreground/40 hover:text-muted-foreground focus-visible:underline" aria-label="Open maintenance controls">Changing</a>
-      </div>
     </>
   );
 }

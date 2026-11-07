@@ -55,12 +55,14 @@ M1 gateway refactor (two tables, two auth modes) ── M2 maintenance Worker + 
 **Files:** `maintenance-site/*` (new), `package.json` · **Scope:** M · **Depends on:** M1
 
 ### Checkpoint M-A (owner, phone on mobile data)
-- [ ] Unlock with the bypass password; the camera shows
-- [ ] Relay 1 on/off and gate group 1 for 1 s are seen on the camera
-- [ ] Return to automatic, Resume, Exit work
-- [ ] Leaving the tab stops the stream (no `camera/stream` in the Pi log afterwards)
+- [x] Unlock with the bypass password; the camera shows (owner, 2026-11-07)
+- [x] Relay 1 on/off and gate group 1 for 1 s are seen on the camera (owner, 2026-11-07)
+- [x] Return to automatic, Resume, Exit work (owner, 2026-11-07)
+- [x] Leaving the tab stops the stream (no `camera/stream` in the Pi log afterwards) (owner, 2026-11-07)
 
 ## M3: Remove bypass from the main app
+**Status (2026-11-07):** implemented. `bypass.tsx` deleted (the route tree regenerated with no `/bypass`), the Settings link removed, the sign-out bypass-exit call removed (it now only clears the old token key), `APP_ROUTES` excludes bypass (22 routes). Gateway tests 49/49 (the main app now returns 404 for `bypass/*`). tsc unchanged; build ✅.
+
 **Description:**
 - Delete `src/routes/bypass.tsx` (the route tree regenerates).
 - Remove the hidden Settings link and the `/bypass/exit` call in `profile.tsx` sign-out.

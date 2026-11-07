@@ -32,7 +32,7 @@ const run = async (name, request, want, extra) => {
 };
 
 ok("maintenance table = bypass/* + camera + snapshot", MAINTENANCE_ROUTES.every((r) => r.maintenance || ["/camera/stream", "/snapshot"].includes(r.path)) && MAINTENANCE_ROUTES.length === 11, `(${MAINTENANCE_ROUTES.length} routes)`);
-ok("app table still has bypass until M3", APP_ROUTES.some((r) => r.path === "/bypass/login"));
+ok("app table has no bypass routes (M3)", !APP_ROUTES.some((r) => r.path.startsWith("/bypass/")) && APP_ROUTES.length === 22, `(${APP_ROUTES.length} routes)`);
 await run("feeding route not exposed", req("/api/pi/feeding/manual/start", { method: "POST", body: "{}" }), 404);
 await run("ai/classify not exposed", req("/api/pi/ai/classify", { method: "POST" }), 404);
 await run("status not exposed", req("/api/pi/status"), 404);

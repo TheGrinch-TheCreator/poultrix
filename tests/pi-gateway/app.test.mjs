@@ -85,8 +85,10 @@ upstreamCalls.length = 0;
 await check("query string not forwarded", req("/api/pi/status?x=1&host=evil", { token: owner }), 200);
 inline(upstreamCalls[0].url === "http://127.0.0.1:5000/api/status", " upstream URL has no query");
 upstreamCalls.length = 0;
-await check("bypass forwards maintenance token", req("/api/pi/bypass/status", { token: owner, headers: { "x-poultrix-maintenance": "mt" } }), 200);
-inline(upstreamCalls[0].init.headers["x-poultrix-maintenance"] === "mt", " maintenance header forwarded on bypass route");
+// Maintenance moved to its own site (maintenance-site M3): no bypass on the main app.
+await check("bypass/status not exposed on main app", req("/api/pi/bypass/status", { token: owner, headers: { "x-poultrix-maintenance": "mt" } }), 404);
+await check("bypass/login not exposed on main app", req("/api/pi/bypass/login", { method: "POST", token: owner, body: "{}" }), 404);
+inline(upstreamCalls.length === 0, " no upstream call for bypass routes");
 await check("camera with ?access_token", req(`/api/pi/camera/stream?access_token=${owner}`), 200, (r) => r.headers.get("content-type").startsWith("multipart/"));
 await check("?access_token refused on non-camera route", req(`/api/pi/snapshot?access_token=${owner}`), 401);
 const before = supaUserCalls;
