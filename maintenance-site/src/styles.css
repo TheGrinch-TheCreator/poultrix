@@ -1,0 +1,3 @@
+/* Shared Poultrix theme and Tailwind setup, plus this app's own sources. */
+@import "../../src/styles.css";
+@source "./";

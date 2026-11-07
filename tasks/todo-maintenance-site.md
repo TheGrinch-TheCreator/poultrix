@@ -29,6 +29,19 @@ M1 gateway refactor (two tables, two auth modes) ── M2 maintenance Worker + 
 **Files:** `src/lib/server/pi-gateway.ts`, `src/server.ts` · **Scope:** M
 
 ## M2: Maintenance Worker and console
+**Status (2026-11-07):** built, **not deployed**.
+- `maintenance-site/`:
+  - `wrangler.jsonc` (Worker `maintenance`, same VPC service, assets with SPA fallback, `run_worker_first`);
+  - `worker.ts` (gateway + security headers; `/api/*` other than `/api/pi/*` → 404);
+  - `vite.config.ts` (`@` → `../src`), `index.html` (noindex), `src/styles.css` (shared theme), `src/pi.ts` (token client, visible-only polls, camera URL), `src/Console.tsx`, `tsconfig.json`, `public/favicon.png`.
+- `Console.tsx`: unlock form; camera (auto, retry 5 s, stops while hidden); a status strip from `snapshot` (5 s); the session bar; servo, relay, sensor-test and stage-test sections from `bypass.tsx`; bypass status polled every 3 s while visible (was 2 s always).
+- Scripts: `npm run build:maintenance`, `npm run deploy:maintenance`.
+- Checks:
+  - tsc on the site: 0 errors; lint clean;
+  - build ✅ (262 KB JS, no Supabase code);
+  - `wrangler deploy --dry-run` shows the `POULTRIX_HISTORY` VPC binding and assets;
+  - gateway tests and the main build still pass.
+
 **Description:**
 - `maintenance-site/`: `wrangler.jsonc` (name `maintenance`, VPC binding `POULTRIX_HISTORY` → same service, `assets` = `dist`), `worker.ts` (`/api/pi/*` → maintenance gateway, everything else → assets with SPA fallback), `vite.config.ts` (alias `@` → `../src`, Tailwind), `index.html`, `src/main.tsx`.
 - `src/Console.tsx`: unlock screen; then the camera (auto-start, stops while hidden), a status strip from `snapshot` (every 5 s while visible), and the sections moved from `bypass.tsx`, with the Return to automatic / Resume / Exit bar.
@@ -36,7 +49,7 @@ M1 gateway refactor (two tables, two auth modes) ── M2 maintenance Worker + 
 - Root `package.json`: `build:maintenance`, `deploy:maintenance`.
 
 **Acceptance:**
-- [ ] `npm run build:maintenance` OK; deploy creates `https://maintenance.poultrix.workers.dev`
+- [ ] `npm run build:maintenance` OK (✅); deploy creates `https://maintenance.poultrix.workers.dev`
 - [ ] Live: camera/snapshot without a token → 401; unlisted path → 404; wrong password → 403 and the 6th → 429
 
 **Files:** `maintenance-site/*` (new), `package.json` · **Scope:** M · **Depends on:** M1

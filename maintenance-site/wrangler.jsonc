@@ -1,0 +1,25 @@
+{
+  // Poultrix maintenance (bypass-only) site: https://maintenance.poultrix.workers.dev
+  // Spec: SPEC-maintenance-site.md. Build: npm run build:maintenance
+  // Deploy: npx wrangler deploy -c maintenance-site/wrangler.jsonc
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "maintenance",
+  "main": "./worker.ts",
+  "compatibility_date": "2026-10-25",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    // The Worker handles every request: /api/pi/* goes to the gateway, the
+    // rest is served from assets with security headers added.
+    "run_worker_first": true
+  },
+  // Same private VPC service as the main app: 127.0.0.1:5000 on the Pi via cloudflared.
+  "vpc_services": [
+    {
+      "binding": "POULTRIX_HISTORY",
+      "service_id": "01a173a1-c124-72f0-97e9-a6a735132374"
+    }
+  ]
+}

@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "test:gateway": "node tests/pi-gateway/run.mjs"
+    "test:gateway": "node tests/pi-gateway/run.mjs",
+    "build:maintenance": "vite build --config maintenance-site/vite.config.ts",
+    "deploy:maintenance": "npm run build:maintenance && npx wrangler deploy -c maintenance-site/wrangler.jsonc"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
