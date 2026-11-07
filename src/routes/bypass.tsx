@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Card, CardTitle, PageHeader } from "@/components/poultrix/ui";
-import { API_URL } from "@/lib/live-hardware";
+import { PiError, piFetch } from "@/lib/pi-client";
 
 export const Route = createFileRoute("/bypass")({ component: BypassPage });
 const inputClass = "w-full rounded-lg border bg-background px-3 py-2 text-sm";
@@ -19,15 +19,20 @@ function BypassPage() {
   const [relayState, setRelayState] = useState<Record<number, boolean>>({});
   const [relayReady, setRelayReady] = useState(false);
   const [status, setStatus] = useState<any>(null);
+  // Through the authenticated Worker gateway: needs the app login and,
+  // after bypass login, the maintenance token.
   async function call(path: string, data?: unknown, key = token) {
-    const response = await fetch(`${API_URL}/api/bypass/${path}`, {
-      method: path === "status" ? "GET" : "POST",
-      headers: {"Content-Type":"application/json", ...(key ? {"X-Poultrix-Maintenance":key} : {})},
-      ...(data ? {body:JSON.stringify(data)} : {}),
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
-    return result;
+    try {
+      const response = await piFetch(`/bypass/${path}`, {
+        method: path === "status" ? "GET" : "POST",
+        ...(data ? {body:JSON.stringify(data)} : {}),
+        ...(key ? {maintenanceToken:key} : {}),
+      });
+      return await response.json();
+    } catch (error) {
+      if (error instanceof PiError && error.status === 429) throw new Error("Too many attempts. Wait 10 minutes, then try again.");
+      throw error;
+    }
   }
   function clearSession() { setToken(""); try { localStorage.removeItem(SESSION_KEY); } catch {} }
   async function perform(path: string, data?:unknown): Promise<boolean> {
