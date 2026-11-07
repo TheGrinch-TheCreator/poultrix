@@ -70,8 +70,8 @@ M1 gateway refactor (two tables, two auth modes) ── M2 maintenance Worker + 
 - Deploy the main app.
 
 **Acceptance:**
-- [ ] `https://app.poultrix.workers.dev/bypass` → 404; `POST /api/pi/bypass/login` on the main app → 404
-- [ ] No "bypass" link in the main UI
+- [x] `https://app.poultrix.workers.dev/bypass` → 404; `POST /api/pi/bypass/login` on the main app → 404 (live, Worker `399953c1`, 2026-11-07)
+- [x] No "bypass" link in the main UI (bundle has no `/bypass` link)
 
 **Files:** `src/routes/bypass.tsx` (delete), `src/routes/settings.tsx`, `src/routes/profile.tsx`, `src/lib/server/pi-gateway.ts` · **Scope:** S · **Depends on:** M-A
 
