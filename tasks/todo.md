@@ -183,11 +183,13 @@ Deploy order: **firmware (Phase 1) must be flashed before the Pi change (Phase 2
 ---
 
 ## Task 9: Docs and graph
+**Status (2026-11-07):** done ahead of Checkpoint C (owner asked). CLAUDE.md and 19 vault notes updated; AD-15/16/17 added. Notes keep `main` behavior labelled where it's still deployed.
+
 **Description:** Update CLAUDE.md (modes, protocol list, recovery, Finisher-ack text). Update the Obsidian notes `SERIAL_PROTOCOL`, `ARDUINO`, `BACKEND`, `BYPASS_MODE`, `TEMPERATURE_CONTROL`, `API_REFERENCE`, `FRONTEND`, `ARCHITECTURE_DECISIONS` (AD-02/03/04/07 superseded, new AD for always-live), `KNOWN_ISSUES`, `CURRENT_STATUS`, `CHANGELOG`, `TEST_RESULTS`. Run `graphify update .`.
 
 **Acceptance criteria:**
-- [ ] No doc describes SAFE/TEST modes or the LIVE toggle as current
-- [ ] The protocol table matches the firmware
+- [x] No doc describes SAFE/TEST modes or the LIVE toggle as current
+- [x] The protocol table matches the firmware
 
 **Verification:**
 - [ ] `grep -rn "SAFE" CLAUDE.md` shows only historical notes; the graph update succeeds
