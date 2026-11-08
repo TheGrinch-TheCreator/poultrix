@@ -66,6 +66,15 @@ P2 gateway owner-only routes ─────┴─ P3 Settings card ── deplo
 **Files:** `src/lib/server/pi-gateway.ts`, `tests/pi-gateway/*` · **Scope:** S
 
 ## P3: Settings card
+**Status (2026-11-08): built, not deployed.** New `src/components/poultrix/SystemPowerCard.tsx` on Settings.
+- **Controls:** Restart system; Power off for 5/15/30 minutes, or and stay off.
+- **Confirm dialogs** with the climate-control warning; stay off says nothing turns it back on remotely.
+- **Banner** ("Restarting…" / "Powered off until about HH:MM" / "Turn it on at the farm"), kept in `sessionStorage`, cleared when a snapshot succeeds more than 45 s after the action.
+- **Disabled** while a gate is DISPENSING or an action is pending.
+- **Owner check:** 403 shows "Only the farm owner can do this".
+- **Polling:** none added (uses the shared snapshot).
+- **Checks:** lint clean (new file and settings), tsc 13 (unchanged), build OK.
+
 **Description:** a "System power" card on `src/routes/settings.tsx` (component `SystemPowerCard.tsx`):
 - **Restart** button, and **Power off** with 5/15/30 min / Stay off;
 - confirm dialogs with the warnings from the spec;
@@ -75,7 +84,7 @@ P2 gateway owner-only routes ─────┴─ P3 Settings card ── deplo
 - no new polls.
 
 **Acceptance:**
-- [ ] `npm run build`, `npm run lint` (no new errors).
+- [x] `npm run build`, `npm run lint` (no new errors).
 
 **Files:** `src/components/poultrix/SystemPowerCard.tsx`, `src/routes/settings.tsx`, `src/lib/live-endpoints.ts` or `pi-client` call · **Scope:** S
 

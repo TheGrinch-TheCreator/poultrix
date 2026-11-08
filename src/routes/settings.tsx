@@ -4,6 +4,7 @@ import { ThemeToggle } from "@/components/poultrix/ThemeToggle";
 import { Switch } from "@/components/ui/switch";
 import { farm } from "@/lib/demo-data";
 import { Card, CardTitle, PageHeader } from "@/components/poultrix/ui";
+import { SystemPowerCard } from "@/components/poultrix/SystemPowerCard";
 
 const FARM_NAME_KEY = "poultrix.farmName";
 const FARM_LOCATION_KEY = "poultrix.farmLocation";
@@ -116,6 +117,7 @@ function SettingsPage() {
           <p className="text-sm text-muted-foreground">Stage targets for feed, temperature and lighting are set by POULTRIX from the growth cycle. Changing them from the web is TBD / requires implementation decision.</p>
           <p className="mt-2 text-sm font-medium">Defaults use Philippine climate standards: Starter 32–34°C (first week), Grower 26–28°C, Finisher 24–26°C.</p>
         </Card>
+        <SystemPowerCard />
       </div>
     </>
   );
