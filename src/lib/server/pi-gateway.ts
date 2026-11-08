@@ -52,6 +52,8 @@ const ROUTES: readonly PiRoute[] = [
   { path: "/environment/standards", upstream: "/api/environment/standards", methods: GET },
   // Controls
   { path: "/feeding/config", upstream: "/api/feeding/config", methods: BOTH },
+  { path: "/feeding/sessions", upstream: "/api/feeding/sessions", methods: GET },
+  { path: "/feeding/automatic", upstream: "/api/feeding/automatic", methods: POST, owner: true },
   { path: "/feeding/manual/preview", upstream: "/api/feeding/manual/preview", methods: POST },
   { path: "/feeding/manual/start", upstream: "/api/feeding/manual/start", methods: POST },
   { path: "/feeding/job/stop", upstream: "/api/feeding/job/stop", methods: POST },

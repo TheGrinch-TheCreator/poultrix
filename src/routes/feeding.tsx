@@ -1,4 +1,5 @@
 import { FeedingPlanner } from "@/components/poultrix/FeedingPlanner";
+import { AutoFeedingCard } from "@/components/poultrix/AutoFeedingCard";
 import { useEffect, useState } from "react";
 import { piFetch } from "@/lib/pi-client";
 
@@ -70,5 +71,5 @@ export const Route = createFileRoute("/feeding")({
 const STEPS = ["Growth stage", "Feed type", "Target amount", "Gates open", "Weighing", "Target reached", "Complete"];
 
 function FeedingPage() {
- return <main className="space-y-4"><LiveCompartmentManager /><FeedingPlanner manual /></main>;
+ return <main className="space-y-4"><AutoFeedingCard /><LiveCompartmentManager /><FeedingPlanner manual /></main>;
 }

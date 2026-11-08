@@ -138,6 +138,13 @@ A1 feeding_schedule.py + unit tests ─┬─ A2 trough calibration (Pi + mainte
 **Files:** `raspberry-pi/app.py` · **Scope:** M · **Depends on:** A1, A2
 
 ## A4: Feeding page and alerts
+**Status (2026-11-08): built, not deployed.**
+- **`AutoFeedingCard.tsx`** (top of the Feeding page): On/Off/Locked pill; a plain explanation; session amount, times, next session; Turn on/off (owner; locked button disabled; confirm); today's sessions with result, grams, reason and a low-rise hint. Polls `feeding/sessions` every 30 s.
+- **`src/lib/feeding-reasons.ts`:** record type and reason texts.
+- **Alerts:** auto-disabled (critical), fault, low rise, partial, unreadable, skipped (other than trough full), for the last session today; one id per session.
+- **Gateway:** `feeding/sessions` (GET), `feeding/automatic` (POST, owner); main app 26 routes.
+- **Checks:** gateway ALL PASS (helper reads 200, helper switch 403 `OWNER_ONLY`, owner 200); tsc 13 (unchanged); new files lint-clean; build OK.
+
 **Description:**
 - **Feeding page:**
   - Automatic feeding toggle (owner only) with status: locked (why) / on / off;
@@ -148,10 +155,17 @@ A1 feeding_schedule.py + unit tests ─┬─ A2 trough calibration (Pi + mainte
 - **Polling:** none faster than 30 s.
 
 **Acceptance:**
-- [ ] Gateway tests.
-- [ ] Build and lint (no new errors).
+- [x] Gateway tests.
+- [x] Build and lint (no new errors).
 
 **Files:** `src/routes/feeding.tsx` (or a new `AutoFeedingCard.tsx`), `src/lib/live-alerts.ts`, `src/lib/server/pi-gateway.ts`, tests · **Scope:** M · **Depends on:** A3
+
+**Deployed 2026-11-08 13:37–13:40:**
+- **Pi:** `app.py` `8501c326` (backup `app_backup_before_auto_feeding_*`).
+- **Pi:** `feeding_schedule.py` `7e4b92d0`. It was forgotten in the first step, which gave `/api/feeding/sessions` a 500 (`FULL_MARGIN_GRAMS` missing) for about 3 min; fixed.
+- **Worker `app`:** `3aed9d26`.
+- **Live check:** locked (`not_commissioned`), 157.5 g at 06/10/14/18, next 14:00; LIVE, GROWER.
+- **Lesson:** deploy every changed Pi module together (`app.py`, `stage_schedule.py`, `feeding_schedule.py`).
 
 ### Checkpoint F-B (owner present, supervised)
 - [ ] Set the Pi commissioning flag temporarily, with a test session time a few minutes ahead. Empty trough → about the target is dispensed; weigh it on a kitchen scale.

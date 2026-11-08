@@ -100,6 +100,12 @@ await check("reboot by approved non-owner", req("/api/pi/system/reboot", { metho
 await check("power-off by approved non-owner", req("/api/pi/system/power-off", { method: "POST", token: helper, body: "{}" }), 403, (_, t) => t.includes("OWNER_ONLY"));
 await check("helper can still read", req("/api/pi/snapshot", { token: helper }), 200);
 upstreamCalls.length = 0;
+await check("feeding sessions readable by helper", req("/api/pi/feeding/sessions", { token: helper }), 200);
+await check("automatic switch by helper", req("/api/pi/feeding/automatic", { method: "POST", token: helper, body: JSON.stringify({ enabled: true }) }), 403, (_, t) => t.includes("OWNER_ONLY"));
+upstreamCalls.length = 0;
+await check("automatic switch by owner", req("/api/pi/feeding/automatic", { method: "POST", token: owner, body: JSON.stringify({ enabled: false }) }), 200);
+inline(upstreamCalls[0]?.url === "http://127.0.0.1:5000/api/feeding/automatic", " automatic switch reaches fixed Pi path");
+upstreamCalls.length = 0;
 await check("reboot signed out", req("/api/pi/system/reboot", { method: "POST", body: "{}" }), 401);
 await check("reboot via GET", req("/api/pi/system/reboot", { token: owner }), 405);
 inline(upstreamCalls.length === 0, " no upstream call for refused power requests");
