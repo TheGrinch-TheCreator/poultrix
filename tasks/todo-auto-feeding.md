@@ -215,5 +215,5 @@ CLAUDE.md, AGENTS.md (if rules change), vault (FEEDING_SYSTEM, API_REFERENCE, AD
   - Firmware: the LCD shows the last reported hopper value; the report waits up to 110 ms for a conversion (`readHx711RawWait`).
   - Flashed 16:23 (hex `cedda118`, write-only with rollback `81a0306b` on hand): **19 % → 10 %**.
 - **Cause 2 (open):** the rest is random (no link to relays): likely hopper HX711 wiring/contacts (D3/D2, 5V, GND) or cable routing. The owner is to check it.
-- **Pi smoothing:** a missed report keeps the last good value up to 6 s (`WEIGHT_HOLD_SECONDS`, `missedReadings`); after 6 s without a good reading NOT_READY shows. Harness 7/7. **Not deployed yet** (needs the owner's "deploy").
+- **Pi smoothing:** a missed report keeps the last good value up to 6 s (`WEIGHT_HOLD_SECONDS`, `missedReadings`); after 6 s without a good reading NOT_READY shows. Harness 7/7. **Deployed 2026-11-08** (Pi `app.py` `9dcbc9d1`, all three modules): over 20 s the hopper always showed a weight (781–836 g); 3 missed reports were held (`missedReadings: 1`).
 
