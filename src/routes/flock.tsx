@@ -2,6 +2,7 @@ import { FeedingPlanner } from "@/components/poultrix/FeedingPlanner";
 import { createFileRoute } from "@tanstack/react-router";
 import { Camera } from "lucide-react";
 import { FlockCameraPreview } from "@/components/poultrix/FlockCameraPreview";
+import { BatchDaySummary, BatchTimeline } from "@/components/poultrix/StageSchedule";
 import { useEffect, useState } from "react";
 import { Card, CardTitle, PageHeader, Pill, StageBadge } from "@/components/poultrix/ui";
 import { useAI, useHardware, stageName } from "@/lib/live-hardware";
@@ -103,17 +104,13 @@ function FlockPage() {
             <span className="text-sm text-muted-foreground">Latest AI detection</span>
             {detected ? <StageBadge stage={detected} /> : <span>—</span>}
           </div>
-          <p className="mt-4 text-xs text-muted-foreground">
-            Bird count is editable below. Batch dates will appear when real batch records are connected.
-          </p>
+          <BatchDaySummary schedule={ai?.schedule} />
         </Card>
       </div>
       <FeedingPlanner editable />
       <Card className="mt-5">
         <CardTitle>Batch timeline</CardTitle>
-        <p className="text-sm text-muted-foreground">
-          No recorded stage-transition history is available from the current API.
-        </p>
+        <BatchTimeline schedule={ai?.schedule} current={stage} />
       </Card>
     </>
   );

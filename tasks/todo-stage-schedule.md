@@ -90,6 +90,16 @@ S1 stage_schedule.py + unit tests ── S2 app.py wiring ── Pi deploy ─�
 - [ ] Climate control, the camera and the maintenance site keep working.
 
 ## S3: Frontend
+**Status (2026-11-08): deployed** (Worker `app` version `78f56c8f`).
+- New `src/components/poultrix/StageSchedule.tsx`: `BatchDaySummary` (Day N, phase, next check, overdue notice, last check) and `BatchTimeline` (3 stages, "from day", Done/Current/Overdue/Upcoming).
+- `live-hardware.ts`: `StageSchedule` type on `AI.schedule`.
+- `flock.tsx`: uses both.
+- `ai-stage.tsx`: new help text, "Camera check (doesn't change the stage)" button, "From day N" from the API.
+- `live-alerts.ts`: `stage-overdue-<STAGE>-<lastAttemptDate>` warning; `finisher-ack` alert removed.
+- `stage-requirements.ts`: `referenceDays` removed.
+- `FeedingPlanner.tsx`: notice after saving (new batch → Starter, or why not), refreshes the snapshot, footer text.
+- Checks: build ✅; gateway tests ALL PASS; tsc 15 errors (16 before, none new); non-formatting lint errors in touched files unchanged (8); the new file is lint-clean. No new polls.
+
 **Description:**
 - **Types:** `useAI` gets a typed `schedule` field (`src/lib/live-hardware.ts`).
 - **Flock page:**

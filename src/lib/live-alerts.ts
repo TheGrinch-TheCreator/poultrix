@@ -86,7 +86,16 @@ function deriveAlerts(s: Snapshot | null): LiveAlert[] {
     if (hw.lightRaw == null) add(out,"ldr-no-reading","warning","LDR reading unavailable","The Arduino is connected, but no light sensor reading is reported.","Check the LDR wiring and Arduino output.");
   }
   if (s.ai?.error || s.ai?.status === "error") add(out,"ai-error","warning","AI classification error",String(s.ai.error || "The classifier reported an error."),"Inspect the camera feed and AI backend logs.");
-  if (s.ai?.finisherAcknowledgementRequired || s.ai?.finisherTransitionPending) add(out,"finisher-ack","warning","Finisher stage needs acknowledgement","A confirmed transition is waiting for the farmer's refill acknowledgement.","Verify the correct Finisher feed is loaded, then acknowledge the transition in the AI Stage page.");
+  const schedule = s.ai?.schedule;
+  if (schedule && schedule.overdueDays > 0 && typeof schedule.overdueStage === "string") {
+    // One id per day: acknowledging hides it until the next failed daily check.
+    const stage = schedule.overdueStage.charAt(0) + schedule.overdueStage.slice(1).toLowerCase();
+    const last = schedule.lastAttempt;
+    const seen = last?.detectedStage ? ` The last check (${last.date}) saw ${last.detectedStage.charAt(0) + last.detectedStage.slice(1).toLowerCase()}${typeof last.confidence === "number" ? ` at ${last.confidence.toFixed(1)}%` : ""}.` : "";
+    add(out, `stage-overdue-${schedule.overdueStage}-${last?.date ?? schedule.batchDay}`, "warning", `${stage} check overdue`,
+      `Day ${schedule.batchDay}: ${stage} has not been confirmed for ${schedule.overdueDays} day${schedule.overdueDays === 1 ? "" : "s"}.${seen}`,
+      "Check the camera view and lighting. The Pi tries again at the next daily check.");
+  }
   if (s.weight && /^(ERROR|FAULT|DISCONNECTED)$/i.test(String(s.weight.status || ""))) add(out,"weight-fault","warning","Feed weight sensor issue",`HX711 reported ${s.weight.status}.`,"Check load cell wiring, calibration, and the HX711 module.");
   if (s.feeding?.gates && typeof s.feeding.gates === "object") Object.entries(s.feeding.gates).forEach(([gate, value]) => {
     const v = value as { status?: string };
