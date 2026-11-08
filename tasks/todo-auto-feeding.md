@@ -206,4 +206,6 @@ A1 feeding_schedule.py + unit tests ─┬─ A2 trough calibration (Pi + mainte
 - [x] Then the owner decides whether to leave the flag and the toggle on → **kept on**.
 
 ## A5: Docs
+**Status (2026-11-08): done.** CLAUDE.md (feeding section, env, Pi modules and state files, firmware maintenance/hole notes, routes 26/14, UI); CAPABILITY_MAP; spec marked DONE; vault: FEEDING_SYSTEM, CURRENT_STATUS, API_REFERENCE, BYPASS_MODE, ARDUINO, DEPLOYMENT, KNOWN_ISSUES, TODO, CHANGELOG, TEST_RESULTS, AD-28 to AD-30.
+
 CLAUDE.md, AGENTS.md (if rules change), vault (FEEDING_SYSTEM, API_REFERENCE, AD-28, CURRENT_STATUS, CHANGELOG, TEST_RESULTS), CAPABILITY_MAP · **Scope:** S

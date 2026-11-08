@@ -1,6 +1,6 @@
 # Spec: auto-feeding
 
-Status: **APPROVED 2026-11-08** (owner: Q1 Zero trough + 500 g check on the maintenance site, Q2 skip + alert, Q3 cap + alert, Q4 default times, Q5 15 min late window, Q7 keep 35/90/135; Q6 unanswered → owner account only, changeable). Plan and tasks: `tasks/todo-auto-feeding.md`. Module `auto-feeding` in `CAPABILITY_MAP.md` (depends on `always-live` ✅ and `stage-schedule` ✅; ships only with `remote-access` login protection ✅).
+Status: **DONE 2026-11-08** (Checkpoint F-B passed; commissioned and switched on). Approved 2026-11-08 (owner: Q1 Zero trough + 500 g check on the maintenance site, Q2 skip + alert, Q3 cap + alert, Q4 default times, Q5 15 min late window, Q7 keep 35/90/135; Q6 unanswered → owner account only, changeable). Plan and tasks: `tasks/todo-auto-feeding.md`. Module `auto-feeding` in `CAPABILITY_MAP.md` (depends on `always-live` ✅ and `stage-schedule` ✅; ships only with `remote-access` login protection ✅).
 
 ## Objective
 Unattended scheduled feeding for the **confirmed stage** (owner requirement 2):
