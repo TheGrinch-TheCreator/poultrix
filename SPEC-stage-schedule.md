@@ -227,5 +227,12 @@ Follow the existing files. Python uses small functions, uppercase module constan
 3. Still Starter on day ≥ 25: the AI may confirm Grower or Finisher, whichever it sees with confidence.
 4. Saving a different batch start date on days 1–10 sets the Arduino to STARTER.
 5. An overdue stage check shows on the Flock page **and** in Alerts.
-6. **(2026-11-08, after an accidental reset)** A batch-date change that would reset the house to STARTER (new date on days 1–10 while the stage isn't STARTER) needs confirmation: the Pi answers 409 `CONFIRM_NEW_BATCH` and the page asks; `confirmNewBatch: true` proceeds. Changing the date back within **10 minutes** restores the previous stage (`stage_restored`).
+7. **(2026-11-08) The daily burst may only start between 10:00 and 11:00** (`DAILY_START_LATEST`); a window that already started may finish. A batch-date edit in the afternoon no longer starts extra checks; the next check moves to tomorrow 10:00. The schedule reports `nextStage`, `nextStageFromDay`, `daysUntilNextStage`; the dashboard's Confirmed growth stage card shows the batch day, days to the next stage (or overdue), and a live countdown to the next AI check.
+6. ~~(2026-11-08) confirmation + 10-min undo on a date change~~ **Replaced the same day (owner) by two explicit actions:**
+   - **Start new batch** (`POST /api/feeding/batch/start {batchStartDate, confirm:"NEW_BATCH"}`, owner only):
+     - saves the date and clears the old batch's AI check;
+     - **always sets STARTER** (decision 1a);
+     - **starts an AI check right away**: on day ≥ 11 the normal day-gated burst (may confirm Grower/Finisher); on days 1–10 a camera check only.
+   - **Saving the flock setup only corrects the date** (and bird count): it never changes the stage or the checks.
+   - This supersedes decision 4 ("a changed date on days 1–10 sets STARTER").
 

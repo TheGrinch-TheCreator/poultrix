@@ -101,6 +101,8 @@ await check("power-off by approved non-owner", req("/api/pi/system/power-off", {
 await check("helper can still read", req("/api/pi/snapshot", { token: helper }), 200);
 upstreamCalls.length = 0;
 await check("feeding sessions readable by helper", req("/api/pi/feeding/sessions", { token: helper }), 200);
+await check("new batch by helper", req("/api/pi/feeding/batch/start", { method: "POST", token: helper, body: JSON.stringify({ batchStartDate: "2026-11-08", confirm: "NEW_BATCH" }) }), 403, (_, t) => t.includes("OWNER_ONLY"));
+await check("new batch by owner", req("/api/pi/feeding/batch/start", { method: "POST", token: owner, body: JSON.stringify({ batchStartDate: "2026-11-08", confirm: "NEW_BATCH" }) }), 200);
 await check("automatic switch by helper", req("/api/pi/feeding/automatic", { method: "POST", token: helper, body: JSON.stringify({ enabled: true }) }), 403, (_, t) => t.includes("OWNER_ONLY"));
 upstreamCalls.length = 0;
 await check("automatic switch by owner", req("/api/pi/feeding/automatic", { method: "POST", token: owner, body: JSON.stringify({ enabled: false }) }), 200);

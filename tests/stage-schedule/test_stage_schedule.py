@@ -72,7 +72,8 @@ class Window(unittest.TestCase):
     def test_not_before_check_time(self):
         self.assertFalse(ss.window_due(at(day_n(11), 9, 59), START, "STARTER", None))
         self.assertTrue(ss.window_due(at(day_n(11), 10, 0), START, "STARTER", None))
-        self.assertTrue(ss.window_due(at(day_n(11), 23, 0), START, "STARTER", None))
+        # A window that hasn't started by 11:00 waits for tomorrow (owner, 2026-11-08).
+        self.assertFalse(ss.window_due(at(day_n(11), 23, 0), START, "STARTER", None))
 
     def test_not_on_days_without_targets(self):
         self.assertFalse(ss.window_due(at(day_n(10), 11), START, "STARTER", None))
@@ -111,6 +112,40 @@ class Window(unittest.TestCase):
         attempt = ss.record_cycle(None, at(day_n(11), 10), None, None, applied=False)
         self.assertEqual(attempt["cycles"], 1)
         self.assertIsNone(attempt["detectedStage"])
+
+
+class WindowStartLimit(unittest.TestCase):
+    """The daily burst may only START between 10:00 and 11:00 (owner, 2026-11-08):
+    a batch-date change in the afternoon must not start an extra check."""
+
+    def test_no_start_after_11(self):
+        self.assertTrue(ss.window_due(at(day_n(26), 10, 59), START, "GROWER", None))
+        self.assertFalse(ss.window_due(at(day_n(26), 11, 0), START, "GROWER", None))
+        self.assertFalse(ss.window_due(at(day_n(26), 15, 36), START, "GROWER", None))
+
+    def test_started_window_may_finish_after_11(self):
+        attempt = ss.record_cycle(None, at(day_n(26), 10, 50), "GROWER", 80.0, applied=False)
+        self.assertTrue(ss.window_due(at(day_n(26), 11, 20), START, "GROWER", attempt))
+
+    def test_next_check_moves_to_tomorrow_after_11(self):
+        s = ss.schedule_status(START, "GROWER", at(day_n(26), 15, 0), None)
+        self.assertEqual(s["nextCheckAt"], at(day_n(27), 10).isoformat())
+        s = ss.schedule_status(START, "GROWER", at(day_n(26), 9, 0), None)
+        self.assertEqual(s["nextCheckAt"], at(day_n(26), 10).isoformat())
+
+
+class NextStage(unittest.TestCase):
+    def test_days_until_next_stage(self):
+        s = ss.schedule_status(START, "STARTER", at(day_n(5)), None)
+        self.assertEqual((s["nextStage"], s["nextStageFromDay"], s["daysUntilNextStage"]), ("GROWER", 11, 6))
+        s = ss.schedule_status(START, "GROWER", at(day_n(15)), None)
+        self.assertEqual((s["nextStage"], s["nextStageFromDay"], s["daysUntilNextStage"]), ("FINISHER", 25, 10))
+        s = ss.schedule_status(START, "GROWER", at(day_n(29)), None)
+        self.assertEqual((s["nextStage"], s["daysUntilNextStage"]), ("FINISHER", 0))
+        s = ss.schedule_status(START, "FINISHER", at(day_n(30)), None)
+        self.assertEqual((s["nextStage"], s["daysUntilNextStage"]), (None, None))
+        s = ss.schedule_status(None, "STARTER", at(day_n(5)), None)
+        self.assertEqual(s["daysUntilNextStage"], None)
 
 
 class Persistence(unittest.TestCase):

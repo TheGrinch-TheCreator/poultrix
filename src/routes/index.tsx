@@ -50,6 +50,8 @@ function Dashboard() {
   const trough = weight?.trough;
   const nextFeeding = getNextFeeding(feedingPlan?.times, clock);
   const assignedCompartment = feedingPlan?.selectedCompartment;
+  const schedule = ai?.schedule;
+  const nextStage = stageName(schedule?.nextStage);
 
   return (
     <div className="space-y-5">
@@ -62,7 +64,16 @@ function Dashboard() {
             <Stat label="AI confidence" value={typeof agreeing?.confidence === "number" && ai?.lastInference ? `${agreeing.confidence.toFixed(1)}%` : "—"} />
             <Stat label="Last analyzed" value={formatDate(ai?.lastInference)} />
           </div>
-          <p className="mt-3 text-xs text-muted-foreground">Latest AI detection: {detectedStage || "—"}. The main stage above comes from Arduino confirmation, not an unconfirmed AI prediction.</p>
+          {schedule && schedule.batchDay !== null && (
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              <Stat
+                label={`Batch day ${schedule.batchDay}`}
+                value={!nextStage ? "Final stage" : schedule.daysUntilNextStage ? `${nextStage} in ${schedule.daysUntilNextStage} day${schedule.daysUntilNextStage === 1 ? "" : "s"}` : schedule.overdueDays > 0 ? `${nextStage} check, ${schedule.overdueDays} day${schedule.overdueDays === 1 ? "" : "s"} overdue` : `${nextStage} check due`}
+              />
+              <Stat label="Next AI check" value={schedule.windowOpen ? "Checking now" : countdown(schedule.nextCheckAt, clock)} />
+            </div>
+          )}
+          <p className="mt-3 text-xs text-muted-foreground">Latest AI detection: {detectedStage || "—"}. The main stage above comes from Arduino confirmation, not an unconfirmed AI prediction.{nextStage && schedule?.nextStageFromDay ? ` ${nextStage} can be confirmed from day ${schedule.nextStageFromDay}; the AI checks once a day at ${schedule.checkTime}.` : ""}</p>
         </Card>
         <Card>
           <CardTitle icon={<Thermometer className="h-4 w-4" />} right={<Pill tone={!live || temp == null ? "neutral" : high || low ? "warn" : "ok"}>{!live || temp == null ? "No live reading" : high ? "Above target" : low ? "Below target" : "In range"}</Pill>}>Temperature</CardTitle>
@@ -130,6 +141,16 @@ function Dashboard() {
       </Card>
     </div>
   );
+}
+
+/** "17 h 58 m" / "3 d 4 h" / "58 s" until `iso`; "—" when unknown. */
+function countdown(iso: string | null | undefined, now: number): string {
+  if (!iso) return "—";
+  const ms = new Date(iso).getTime() - now;
+  if (!Number.isFinite(ms)) return "—";
+  if (ms <= 0) return "Due now";
+  const s = Math.floor(ms / 1000), d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  return d > 0 ? `${d} d ${h} h` : h > 0 ? `${h} h ${m} m` : m > 0 ? `${m} m ${s % 60} s` : `${s} s`;
 }
 
 function formatDate(value?: string | null) {

@@ -3071,62 +3071,63 @@ def _read_feed_config():
     except (OSError, ValueError, TypeError):
         return dict(DEFAULT_FEED_CONFIG)
 
-# Undo for an accidental batch-date change (owner, 2026-11-08): if the date
-# is changed back within NEW_BATCH_UNDO_SECONDS, the stage it had before the
-# reset to STARTER is restored.
-NEW_BATCH_UNDO_SECONDS = 600
-new_batch_undo = None  # {"previousStart", "previousStage", "at"}
-
-
-def new_batch_needs_confirmation(start, previous_start):
-    """True when saving `start` would reset the house to STARTER."""
-    if start == previous_start:
-        return False
-    day = stage_schedule.batch_day(start, stage_schedule.local_date(stage_schedule.local_now()))
-    if day is None or day >= stage_schedule.GROWER_FROM_DAY:
-        return False
+def start_new_batch(start):
+    """Explicit "Start new batch" (owner, 2026-11-08): save the date, clear the
+    old batch's AI check, set the house to STARTER (always, decision 1a), and
+    start an AI check now instead of waiting for 10:00:
+    - day >= 11: the normal day-gated burst (may confirm Grower/Finisher);
+    - day 1-10: a camera check only (nothing may change yet)."""
+    global schedule_attempt
+    with feed_config_lock:
+        config = _read_feed_config()
+        config["batchStartDate"] = start
+        FEED_CONFIG_PATH.write_text(_json.dumps(config, indent=2))
+    reset_transition_candidate("new_batch")
     with state_lock:
         current = str(state.get("stage") or "").strip().upper()
-    return current != "STARTER"
-
-
-def start_new_batch(start, previous_start=None):
-    """A changed batch start date: clear the daily attempt and the AI
-    candidate; on days 1-10 set the Arduino to STARTER (owner decision 4).
-    Changing the date back within 10 min restores the previous stage."""
-    global schedule_attempt, new_batch_undo
-    undo = new_batch_undo
-    if undo and start == undo["previousStart"] and time.monotonic() - undo["at"] <= NEW_BATCH_UNDO_SECONDS:
-        new_batch_undo = None
-        with state_lock:
-            current = str(state.get("stage") or "").strip().upper()
-        result = {"batchStartDate": start, "batchDay": None, "starterApplied": False,
-                  "status": "already_restored", "restoredStage": undo["previousStage"]}
-        if undo["previousStage"] and undo["previousStage"] != current:
-            hardware = apply_confirmed_stage_to_arduino(undo["previousStage"])
-            result["status"] = "stage_restored" if hardware.get("success") else f"restore_failed:{hardware.get('status')}"
-        print(f"[AUDIT] batch date changed back to {start} by {request_user()}: {result['status']} ({undo['previousStage']})", flush=True)
-        return result
+    result = {"batchStartDate": start, "starterApplied": False, "status": "already_starter", "analysis": None}
+    if current != "STARTER":
+        hardware = apply_confirmed_stage_to_arduino("STARTER")
+        result["starterApplied"] = bool(hardware.get("success"))
+        result["status"] = "applied" if hardware.get("success") else str(hardware.get("status"))
+    today = stage_schedule.local_date(stage_schedule.local_now())
+    day = stage_schedule.batch_day(start, today)
+    result["batchDay"] = day
     with schedule_lock:
-        schedule_attempt = None
-        stage_schedule.save_attempt(STAGE_SCHEDULE_PATH, None)
-    reset_transition_candidate("new_batch")
-    day = stage_schedule.batch_day(start, stage_schedule.local_date(stage_schedule.local_now()))
-    result = {"batchStartDate": start, "batchDay": day, "starterApplied": False, "status": "no_stage_change"}
-    if day is not None and day < stage_schedule.GROWER_FROM_DAY:
-        with state_lock:
-            current = str(state.get("stage") or "").strip().upper()
-        if current == "STARTER":
-            result["status"] = "already_starter"
+        if result["status"] in ("applied", "already_starter") and stage_schedule.allowed_targets(day, "STARTER"):
+            # A started attempt for today: ai_worker runs the burst right away.
+            schedule_attempt = {"date": today.isoformat(), "cycles": 0, "result": "running", "target": None,
+                                "detectedStage": None, "confidence": None, "finishedAt": None, "started": "new_batch"}
+            result["analysis"] = "daily_check_started"
         else:
-            hardware = apply_confirmed_stage_to_arduino("STARTER")
-            result["starterApplied"] = bool(hardware.get("success"))
-            result["status"] = hardware.get("status")
-            if hardware.get("success"):
-                new_batch_undo = {"previousStart": previous_start, "previousStage": current, "at": time.monotonic()}
-                result["undoSeconds"] = NEW_BATCH_UNDO_SECONDS
-    print(f"[AUDIT] new batch {start} (day {day}) by {request_user()}: {result['status']}", flush=True)
+            schedule_attempt = None
+            result["analysis"] = "camera_check"
+        stage_schedule.save_attempt(STAGE_SCHEDULE_PATH, schedule_attempt)
+    if result["analysis"] == "camera_check":
+        threading.Thread(target=run_ai_cycle, kwargs={"scheduled": False}, daemon=True).start()
+    print(f"[AUDIT] new batch {start} (day {day}) by {request_user()}: {result['status']}, {result['analysis']}", flush=True)
     return result
+
+
+@app.route("/api/feeding/batch/start", methods=["POST"])
+def feeding_batch_start_api():
+    """Owner only. Body: {batchStartDate, confirm: "NEW_BATCH"}."""
+    if request_user().lower() not in _owner_emails():
+        return jsonify(error="Only the farm owner can do this", code="OWNER_ONLY"), 403
+    body = request.get_json(silent=True) or {}
+    if body.get("confirm") != "NEW_BATCH":
+        return jsonify(error="Confirmation required"), 400
+    start = body.get("batchStartDate")
+    try:
+        from datetime import date
+        if not isinstance(start, str) or date.fromisoformat(start) > _datetime.now(_ZoneInfo("Asia/Manila")).date():
+            raise ValueError
+    except (ValueError, TypeError):
+        return jsonify(error="A valid past or current batch start date is required"), 400
+    with feed_config_lock:
+        if not _read_feed_config().get("birdCount"):
+            return jsonify(error="Save the number of birds first"), 409
+    return jsonify(success=True, newBatch=start_new_batch(start))
 
 
 @app.route("/api/feeding/config", methods=["GET", "POST"])
@@ -3150,12 +3151,6 @@ def feeding_config_api():
             with feed_config_lock:
                 saved = _read_feed_config()
             previous_start = saved.get("batchStartDate")
-            undo = new_batch_undo
-            changing_back = bool(undo and start == undo["previousStart"])
-            if not changing_back and body.get("confirmNewBatch") is not True and new_batch_needs_confirmation(start, previous_start):
-                day = stage_schedule.batch_day(start, stage_schedule.local_date(stage_schedule.local_now()))
-                return jsonify({"success": False, "code": "CONFIRM_NEW_BATCH", "batchDay": day,
-                                "error": f"This date makes today batch day {day}, a new batch: the house will be set to Starter."}), 409
             with feed_config_lock:
                 # Saving the flock setup never changes the automatic-feeding switch.
                 config = {"birdCount": count, "batchStartDate": start, "times": sorted(times),
@@ -3165,7 +3160,10 @@ def feeding_config_api():
         except (ValueError, TypeError) as exc:
             return jsonify({"success": False, "error": str(exc)}), 400
         if start != previous_start:
-            new_batch = start_new_batch(start, previous_start)
+            # Adjusting the date (e.g. a typo) never changes the stage or the
+            # checks; "Start new batch" is the explicit action for that.
+            print(f"[AUDIT] batch date adjusted {previous_start} -> {start} by {request_user()}", flush=True)
+            new_batch = {"adjusted": True, "previousStart": previous_start, "batchStartDate": start}
     with feed_config_lock:
         config = _read_feed_config()
     with state_lock:

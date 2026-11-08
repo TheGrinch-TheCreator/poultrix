@@ -20,6 +20,10 @@ except ZoneInfoNotFoundError:  # e.g. Windows without tzdata; Manila is UTC+8, n
 GROWER_FROM_DAY = 11
 FINISHER_FROM_DAY = 25
 DAILY_CHECK_TIME = time(10, 0)  # local (Manila) time the daily window opens
+# The daily burst may only START before this (a Pi restart can still catch up);
+# later it waits for tomorrow. A batch-date edit in the afternoon must not
+# start an extra check (owner, 2026-11-08).
+DAILY_START_LATEST = time(11, 0)
 DAILY_MAX_CYCLES = 6            # AI cycles per daily window (one every 5 min)
 
 STAGES = ("STARTER", "GROWER", "FINISHER")
@@ -78,14 +82,21 @@ def _finished_on(attempt, today):
     return bool(attempt) and attempt.get("date") == today.isoformat() and attempt.get("result") in FINISHED
 
 
+def _started_on(attempt, today):
+    return bool(attempt) and attempt.get("date") == today.isoformat() and attempt.get("result") == "running"
+
+
 def window_due(now, start, current, attempt):
     """True when an automatic AI cycle should run now."""
     today = local_date(now)
     if not allowed_targets(batch_day(start, today), current):
         return False
-    if now.astimezone(TZ).time() < DAILY_CHECK_TIME:
+    local_time = now.astimezone(TZ).time()
+    if local_time < DAILY_CHECK_TIME or _finished_on(attempt, today):
         return False
-    return not _finished_on(attempt, today)
+    if _started_on(attempt, today):
+        return True  # a window that already started may finish its cycles
+    return local_time < DAILY_START_LATEST
 
 
 def record_cycle(attempt, now, detected, confidence, applied):
@@ -165,9 +176,14 @@ def schedule_status(start, current, now, attempt):
             if overdue_days > 0:
                 overdue_stage = "GROWER" if current == "STARTER" else "FINISHER"
         gate_date = first + timedelta(days=gate - 1)
-        earliest = today + timedelta(days=1) if _finished_on(attempt, today) else today
+        too_late = now.astimezone(TZ).time() >= DAILY_START_LATEST and not _started_on(attempt, today)
+        earliest = today + timedelta(days=1) if (_finished_on(attempt, today) or too_late) else today
         check_date = max(earliest, gate_date)
         next_check = datetime.combine(check_date, DAILY_CHECK_TIME, tzinfo=TZ).isoformat()
+
+    next_stage = {"STARTER": "GROWER", "GROWER": "FINISHER"}.get(current)
+    next_from = FROM_DAY[next_stage] if next_stage else None
+    days_until = max(0, next_from - day) if next_stage and day is not None else None
 
     window_open = (
         bool(targets) and bool(attempt) and attempt.get("date") == today.isoformat()
@@ -184,6 +200,9 @@ def schedule_status(start, current, now, attempt):
         "maxCyclesPerDay": DAILY_MAX_CYCLES,
         "windowOpen": window_open,
         "nextCheckAt": next_check,
+        "nextStage": next_stage,
+        "nextStageFromDay": next_from,
+        "daysUntilNextStage": days_until,
         "overdueDays": overdue_days,
         "overdueStage": overdue_stage,
         "lastAttempt": dict(attempt) if attempt else None,

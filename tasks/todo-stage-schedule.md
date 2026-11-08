@@ -206,3 +206,16 @@ S1 stage_schedule.py + unit tests ── S2 app.py wiring ── Pi deploy ─�
   - Harness 8/8; all earlier harnesses pass.
   - Deployed: Pi `app.py` `67b15625`, Worker `app` `a7848357`.
 
+## Follow-up 2026-11-08: once-a-day start limit + dashboard countdown
+- **Observed:** after the 15:35 date edits cleared the attempt, a new burst started at 15:36 (5-min cycles), because `window_due` only required "after 10:00".
+- **Fix:** `DAILY_START_LATEST = 11:00` (resume allowed); `nextCheckAt` moves to tomorrow after 11:00; `nextStage`, `nextStageFromDay`, `daysUntilNextStage` in the schedule.
+- **Dashboard card:** batch day, next stage in N days / overdue, live countdown (existing 1 s clock, no new requests).
+- **Tests:** 23 unit tests (old "23:00 due" assertion updated); harnesses pass.
+
+## Follow-up 2026-11-08: explicit Start new batch / adjust date (owner design)
+- **Pi:** `POST /api/feeding/batch/start` (owner; Starter always; burst seeded as a started attempt on day ≥ 11, camera check on days 1–10); config save = date correction only (`[AUDIT] batch date adjusted`); removed the confirmation and undo.
+- **UI:** FeedingPlanner "Save (bird count / correct date)" + "Start new batch" (confirm dialog).
+- **Gateway:** `feeding/batch/start` (POST, owner); main app 27 routes.
+- **Tests:** new-batch harness 13/13; S2 harness adapted; all harnesses and unit tests pass.
+- **Deployed 2026-11-08 16:15** (bundle with the 11:00 limit + dashboard countdown): Pi `app.py` `86a7fbc3`, `stage_schedule.py` `afd3e7b5`, `feeding_schedule.py` `bbbab912` (all three, backups `*_backup_before_new_batch_*`); Worker `app` `e4b28955`. Live: GROWER, day 29, next Finisher check 2026-11-09 10:00, `batch/start` without owner → 403.
+
