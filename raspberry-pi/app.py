@@ -3071,10 +3071,42 @@ def _read_feed_config():
     except (OSError, ValueError, TypeError):
         return dict(DEFAULT_FEED_CONFIG)
 
-def start_new_batch(start):
+# Undo for an accidental batch-date change (owner, 2026-11-08): if the date
+# is changed back within NEW_BATCH_UNDO_SECONDS, the stage it had before the
+# reset to STARTER is restored.
+NEW_BATCH_UNDO_SECONDS = 600
+new_batch_undo = None  # {"previousStart", "previousStage", "at"}
+
+
+def new_batch_needs_confirmation(start, previous_start):
+    """True when saving `start` would reset the house to STARTER."""
+    if start == previous_start:
+        return False
+    day = stage_schedule.batch_day(start, stage_schedule.local_date(stage_schedule.local_now()))
+    if day is None or day >= stage_schedule.GROWER_FROM_DAY:
+        return False
+    with state_lock:
+        current = str(state.get("stage") or "").strip().upper()
+    return current != "STARTER"
+
+
+def start_new_batch(start, previous_start=None):
     """A changed batch start date: clear the daily attempt and the AI
-    candidate; on days 1-10 set the Arduino to STARTER (owner decision 4)."""
-    global schedule_attempt
+    candidate; on days 1-10 set the Arduino to STARTER (owner decision 4).
+    Changing the date back within 10 min restores the previous stage."""
+    global schedule_attempt, new_batch_undo
+    undo = new_batch_undo
+    if undo and start == undo["previousStart"] and time.monotonic() - undo["at"] <= NEW_BATCH_UNDO_SECONDS:
+        new_batch_undo = None
+        with state_lock:
+            current = str(state.get("stage") or "").strip().upper()
+        result = {"batchStartDate": start, "batchDay": None, "starterApplied": False,
+                  "status": "already_restored", "restoredStage": undo["previousStage"]}
+        if undo["previousStage"] and undo["previousStage"] != current:
+            hardware = apply_confirmed_stage_to_arduino(undo["previousStage"])
+            result["status"] = "stage_restored" if hardware.get("success") else f"restore_failed:{hardware.get('status')}"
+        print(f"[AUDIT] batch date changed back to {start} by {request_user()}: {result['status']} ({undo['previousStage']})", flush=True)
+        return result
     with schedule_lock:
         schedule_attempt = None
         stage_schedule.save_attempt(STAGE_SCHEDULE_PATH, None)
@@ -3090,6 +3122,9 @@ def start_new_batch(start):
             hardware = apply_confirmed_stage_to_arduino("STARTER")
             result["starterApplied"] = bool(hardware.get("success"))
             result["status"] = hardware.get("status")
+            if hardware.get("success"):
+                new_batch_undo = {"previousStart": previous_start, "previousStage": current, "at": time.monotonic()}
+                result["undoSeconds"] = NEW_BATCH_UNDO_SECONDS
     print(f"[AUDIT] new batch {start} (day {day}) by {request_user()}: {result['status']}", flush=True)
     return result
 
@@ -3114,7 +3149,14 @@ def feeding_config_api():
                 raise ValueError("Duplicate schedule times")
             with feed_config_lock:
                 saved = _read_feed_config()
-                previous_start = saved.get("batchStartDate")
+            previous_start = saved.get("batchStartDate")
+            undo = new_batch_undo
+            changing_back = bool(undo and start == undo["previousStart"])
+            if not changing_back and body.get("confirmNewBatch") is not True and new_batch_needs_confirmation(start, previous_start):
+                day = stage_schedule.batch_day(start, stage_schedule.local_date(stage_schedule.local_now()))
+                return jsonify({"success": False, "code": "CONFIRM_NEW_BATCH", "batchDay": day,
+                                "error": f"This date makes today batch day {day}, a new batch: the house will be set to Starter."}), 409
+            with feed_config_lock:
                 # Saving the flock setup never changes the automatic-feeding switch.
                 config = {"birdCount": count, "batchStartDate": start, "times": sorted(times),
                           "timezone": "Asia/Manila", "automaticEnabled": bool(saved.get("automaticEnabled")),
@@ -3123,7 +3165,7 @@ def feeding_config_api():
         except (ValueError, TypeError) as exc:
             return jsonify({"success": False, "error": str(exc)}), 400
         if start != previous_start:
-            new_batch = start_new_batch(start)
+            new_batch = start_new_batch(start, previous_start)
     with feed_config_lock:
         config = _read_feed_config()
     with state_lock:

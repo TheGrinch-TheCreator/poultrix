@@ -197,3 +197,12 @@ S1 stage_schedule.py + unit tests ── S2 app.py wiring ── Pi deploy ─�
 - [ ] A Starter detection while in Grower does not move the stage back.
 - [ ] Analyze now does not change the stage.
 - [ ] An overdue check shows on the Flock page and in Alerts.
+
+## Follow-up 2026-11-08: batch-date safeguards
+- **Incident:** while trying dates, the owner saved 2026-10-30 (day 10) at 15:35:17 → the house was reset to STARTER. Changing back to 2026-10-11 didn't undo it, and the afternoon AI check also saw Starter (81–86 %). The owner set Grower on the maintenance site (about 15:45).
+- **Fix:**
+  - the Pi requires `confirmNewBatch` (409 `CONFIRM_NEW_BATCH`) and the FeedingPlanner asks;
+  - changing back within 10 min restores the previous stage.
+  - Harness 8/8; all earlier harnesses pass.
+  - Deployed: Pi `app.py` `67b15625`, Worker `app` `a7848357`.
+

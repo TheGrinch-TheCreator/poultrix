@@ -227,4 +227,5 @@ Follow the existing files. Python uses small functions, uppercase module constan
 3. Still Starter on day ≥ 25: the AI may confirm Grower or Finisher, whichever it sees with confidence.
 4. Saving a different batch start date on days 1–10 sets the Arduino to STARTER.
 5. An overdue stage check shows on the Flock page **and** in Alerts.
+6. **(2026-11-08, after an accidental reset)** A batch-date change that would reset the house to STARTER (new date on days 1–10 while the stage isn't STARTER) needs confirmation: the Pi answers 409 `CONFIRM_NEW_BATCH` and the page asks; `confirmNewBatch: true` proceeds. Changing the date back within **10 minutes** restores the previous stage (`stage_restored`).
 
