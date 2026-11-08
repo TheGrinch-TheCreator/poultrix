@@ -166,6 +166,18 @@ S1 stage_schedule.py + unit tests ── S2 app.py wiring ── Pi deploy ─�
 **Console text:** updated to match (entering changes nothing; test values only on the maintenance site). Deployed: Worker `maintenance` `4080c248`.
 
 ## S4: Docs
+**Status (2026-11-08): done.**
+- AGENTS.md: new stage rule.
+- CLAUDE.md: stage rule, the "main app never shows maintenance" rule, `test:stage-schedule`, Pi deploy of two files and state files, flashing from the Pi, `POULTRIX_OWNER_EMAILS`, firmware dead bands / maintenance entry / I2C timeout, the AI daily window, the manual stage, token-gated simulation, system power, gateway counts 24/12, StageSchedule / SystemPowerCard.
+- Vault: AI_CLASSIFICATION rewritten; CURRENT_STATUS, TEMPERATURE_CONTROL, LIGHTING_CONTROL, BYPASS_MODE, API_REFERENCE, ARDUINO, DEPLOYMENT, KNOWN_ISSUES, TODO, CHANGELOG, TEST_RESULTS; AD-23 to AD-27 (dry-run on a copy first).
+- CAPABILITY_MAP: stage-schedule done.
+
+### Checkpoint S-A (Pi, 2026-11-08): PASSED
+- Day 29, stage STARTER (18 days overdue).
+- 10:00 Grower 92.1 %; 10:03 planned service restart (the attempt kept its count: cycle 2 next); 10:03 90.9 %; 10:09 94.2 %; 10:14 95.3 % → confirmed.
+- The apply was blocked while a maintenance session was open (by design), then applied after the owner exited: **GROWER 10:25**.
+- Note: the planned restart reset the in-memory 3-in-a-row candidate, as documented.
+
 **Description:**
 - **AGENTS.md and CLAUDE.md:** the new stage rule, AI cycle timing, `stage_schedule.py`, the Pi deploy now copies two files.
 - **Vault:**
@@ -176,7 +188,7 @@ S1 stage_schedule.py + unit tests ── S2 app.py wiring ── Pi deploy ─�
 - **Graph:** `graphify update .`
 
 **Acceptance:**
-- [ ] No doc still says age/day is "reference-only".
+- [x] No doc still says age/day is "reference-only" (only the spec's historical "before" notes).
 
 **Files:** `AGENTS.md`, `CLAUDE.md`, `CAPABILITY_MAP.md`, vault notes · **Scope:** S · **Depends on:** S3
 
