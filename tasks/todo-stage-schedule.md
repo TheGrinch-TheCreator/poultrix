@@ -219,3 +219,10 @@ S1 stage_schedule.py + unit tests ── S2 app.py wiring ── Pi deploy ─�
 - **Tests:** new-batch harness 13/13; S2 harness adapted; all harnesses and unit tests pass.
 - **Deployed 2026-11-08 16:15** (bundle with the 11:00 limit + dashboard countdown): Pi `app.py` `86a7fbc3`, `stage_schedule.py` `afd3e7b5`, `feeding_schedule.py` `bbbab912` (all three, backups `*_backup_before_new_batch_*`); Worker `app` `e4b28955`. Live: GROWER, day 29, next Finisher check 2026-11-09 10:00, `batch/start` without owner → 403.
 
+## Follow-up 2026-11-08: dashboard card readings (owner)
+- **Countdown:** the batch-day stat was removed; Next AI check shows h/m/s.
+- **AI confidence:** the latest reading if it agrees with the confirmed stage, else the **last real confident reading that matched it** (`lastAgreeingDetection`: remembered in `ai_last_agreeing.json`, or the latest `ai_checks` history row). Never computed. The owner's request to derive confidence/time from the batch date was declined (it would be an invented AI reading).
+- **Last analyzed:** the start of the last scheduled daily check (`lastAttempt.startedAt`, new; else `finishedAt`).
+- **Tests:** harness 7/7; all harnesses and 23 unit tests pass.
+- **Deployed:** Pi `app.py` `dab7601b`, `stage_schedule.py` `b9cf2859` (all three modules), Worker `app` `3912cd35`. Live: Grower 90.63 % (history, 15:49); next check 2026-11-15 10:00 (batch day 18).
+

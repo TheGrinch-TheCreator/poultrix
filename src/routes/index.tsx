@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Camera, Cpu, Droplets, Fan, Flame, Lightbulb, ScanEye, Sun, Thermometer, Wheat } from "lucide-react";
 import { Card, CardTitle, Pill } from "@/components/poultrix/ui";
-import { agreeingDetection, useAI, useHardware, display, stageName } from "@/lib/live-hardware";
+import { agreeingDetection, sameStage, useAI, useHardware, display, stageName } from "@/lib/live-hardware";
 import { usePiEndpoint } from "@/lib/live-endpoints";
 import { formatWeight, readingStatus, formatReadingTime, type WeightPayload } from "@/lib/live-weights";
 
@@ -51,6 +51,12 @@ function Dashboard() {
   const nextFeeding = getNextFeeding(feedingPlan?.times, clock);
   const assignedCompartment = feedingPlan?.selectedCompartment;
   const schedule = ai?.schedule;
+  // Confidence: the latest reading if it agrees with the confirmed stage, else
+  // the last REAL confident reading that matched it (never computed).
+  const lastMatch = ai?.lastAgreeingDetection && sameStage(ai.lastAgreeingDetection.stage, hw?.stage) ? ai.lastAgreeingDetection : null;
+  const aiConfidence = typeof agreeing?.confidence === "number" && ai?.lastInference ? `${agreeing.confidence.toFixed(1)}%` : lastMatch ? `${lastMatch.confidence.toFixed(1)}%` : "—";
+  // Last analyzed: when the last scheduled daily AI check ran (not manual camera checks).
+  const lastScheduled = schedule?.lastAttempt?.startedAt ?? schedule?.lastAttempt?.finishedAt ?? null;
   const nextStage = stageName(schedule?.nextStage);
 
   return (
@@ -61,15 +67,11 @@ function Dashboard() {
           <div className="mt-2 text-5xl font-extrabold">{stage || "—"}</div>
           <p className="mt-2 text-sm text-muted-foreground">{stage ? "Arduino-confirmed growth stage (restored after restart)" : "Waiting for Arduino confirmation"}</p>
           <div className="mt-4 grid grid-cols-2 gap-3">
-            <Stat label="AI confidence" value={typeof agreeing?.confidence === "number" && ai?.lastInference ? `${agreeing.confidence.toFixed(1)}%` : "—"} />
-            <Stat label="Last analyzed" value={formatDate(ai?.lastInference)} />
+            <Stat label="AI confidence" value={aiConfidence} />
+            <Stat label="Last analyzed" value={lastScheduled ? formatDate(lastScheduled) : "—"} />
           </div>
           {schedule && schedule.batchDay !== null && (
             <div className="mt-4 grid grid-cols-2 gap-3">
-              <Stat
-                label={`Batch day ${schedule.batchDay}`}
-                value={!nextStage ? "Final stage" : schedule.daysUntilNextStage ? `${nextStage} in ${schedule.daysUntilNextStage} day${schedule.daysUntilNextStage === 1 ? "" : "s"}` : schedule.overdueDays > 0 ? `${nextStage} check, ${schedule.overdueDays} day${schedule.overdueDays === 1 ? "" : "s"} overdue` : `${nextStage} check due`}
-              />
               <Stat label="Next AI check" value={schedule.windowOpen ? "Checking now" : countdown(schedule.nextCheckAt, clock)} />
             </div>
           )}
@@ -143,14 +145,15 @@ function Dashboard() {
   );
 }
 
-/** "17 h 58 m" / "3 d 4 h" / "58 s" until `iso`; "—" when unknown. */
+/** "17 h 58 m 12 s" / "1 d 2 h 3 m 4 s" / "58 s" until `iso`; "—" when unknown. */
 function countdown(iso: string | null | undefined, now: number): string {
   if (!iso) return "—";
   const ms = new Date(iso).getTime() - now;
   if (!Number.isFinite(ms)) return "—";
   if (ms <= 0) return "Due now";
   const s = Math.floor(ms / 1000), d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
-  return d > 0 ? `${d} d ${h} h` : h > 0 ? `${h} h ${m} m` : m > 0 ? `${m} m ${s % 60} s` : `${s} s`;
+  const sec = s % 60;
+  return d > 0 ? `${d} d ${h} h ${m} m ${sec} s` : h > 0 ? `${h} h ${m} m ${sec} s` : m > 0 ? `${m} m ${sec} s` : `${sec} s`;
 }
 
 function formatDate(value?: string | null) {

@@ -107,6 +107,8 @@ def record_cycle(attempt, now, detected, confidence, applied):
         attempt = {"date": today, "cycles": 0, "result": "running", "target": None,
                    "detectedStage": None, "confidence": None, "finishedAt": None}
     attempt = dict(attempt)
+    if not attempt.get("startedAt"):
+        attempt["startedAt"] = now.isoformat()  # when this daily check began
     attempt["cycles"] += 1
     attempt["detectedStage"] = _stage(detected)
     attempt["confidence"] = round(float(confidence), 2) if confidence is not None else None

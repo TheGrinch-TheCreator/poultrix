@@ -1324,6 +1324,70 @@ def apply_finisher_after_acknowledgement():
     return {"success": False, "status": "obsolete_endpoint_ai_transitions_are_validated_automatically"}
 
 
+# Last REAL confident AI reading that matched the confirmed (Arduino) stage
+# (owner, 2026-11-08): the dashboard shows its confidence when the latest
+# reading disagrees. Never computed or invented; persisted across restarts.
+AGREEING_PATH = Path(__file__).with_name("ai_last_agreeing.json")
+agreeing_lock = threading.Lock()
+try:
+    last_agreeing = json.loads(AGREEING_PATH.read_text(encoding="utf-8"))
+    if not isinstance(last_agreeing, dict):
+        last_agreeing = None
+except (OSError, ValueError):
+    last_agreeing = None
+
+
+def remember_agreeing_detection(detected, confidence, confident):
+    global last_agreeing
+    with state_lock:
+        current = str(state.get("stage") or "").strip().upper()
+    stage = str(detected or "").strip().upper()
+    if not confident or not stage or stage != current:
+        return
+    record = {"stage": stage, "confidence": round(float(confidence), 2), "at": utc_timestamp()}
+    with agreeing_lock:
+        last_agreeing = record
+        try:
+            tmp = AGREEING_PATH.with_name(AGREEING_PATH.name + ".tmp")
+            tmp.write_text(json.dumps(record), encoding="utf-8")
+            os.replace(tmp, AGREEING_PATH)
+        except OSError as error:
+            print(f"[AI] could not save last agreeing detection: {error}", flush=True)
+
+
+_agreeing_history_cache = {"stage": None, "at": 0.0, "value": None}
+
+
+def current_agreeing_detection():
+    """The remembered matching reading, or the latest real confident reading of
+    the current stage from the history DB (checked at most once a minute)."""
+    with state_lock:
+        current = str(state.get("stage") or "").strip().upper()
+    with agreeing_lock:
+        remembered = dict(last_agreeing) if last_agreeing else None
+    if remembered and remembered.get("stage") == current:
+        return remembered
+    cache = _agreeing_history_cache
+    if cache["stage"] == current and time.monotonic() - cache["at"] < 60:
+        return cache["value"]
+    value = None
+    try:
+        conn = _history_connection()
+        try:
+            row = conn.execute(
+                "SELECT recorded_at, confidence_pct FROM ai_checks WHERE upper(detected_stage) = ? "
+                "AND status = 'ready' AND confidence_pct >= ? ORDER BY id DESC LIMIT 1",
+                (current, AI_MIN_CONFIDENCE)).fetchone()
+        finally:
+            conn.close()
+        if row:
+            value = {"stage": current, "confidence": round(float(row[1]), 2), "at": row[0], "source": "history"}
+    except Exception as error:  # history is optional
+        print(f"[AI] agreeing-detection history lookup failed: {error}", flush=True)
+    cache.update(stage=current, at=time.monotonic(), value=value)
+    return value
+
+
 def batch_start_date():
     with feed_config_lock:
         return _read_feed_config().get("batchStartDate")
@@ -1652,6 +1716,7 @@ def run_ai_cycle(scheduled=False):
             confident,
             scheduled
         )
+        remember_agreeing_detection(winning_stage, winning_confidence, confident)
 
         print(
             "[AI CYCLE] Result: "
@@ -2590,6 +2655,7 @@ def get_ai_status():
     if bypass_authorized():
         result["simulation"] = simulation_snapshot()
     result["schedule"] = current_schedule_status()
+    result["lastAgreeingDetection"] = current_agreeing_detection()
     return jsonify(result)
 
 
