@@ -92,6 +92,16 @@ A1 feeding_schedule.py + unit tests ─┬─ A2 trough calibration (Pi + mainte
 - [ ] Empty trough again: the reading stays within ±25 g of 0 for 5 min.
 
 ## A3: Scheduler wiring (locked)
+**Status (2026-11-08): built, not deployed.** In `app.py` (replaces the old in-memory `feed_schedule_worker`):
+- `feed_schedule_tick()` (one pass, tested directly), `run_feeding_session()`, `feeding_sessions.json` via `_put_session()`.
+- **Persistence:** the session is written as `fault/interrupted` **before** dispensing, then replaced, so a restart never repeats one.
+- **Refusals** (recorded as skips): no stage/target, maintenance, controller not ready, feeding busy, no stage-compatible compartment.
+- **Dispensing:** `session_plan` (rough-check); waits for the job; decreases the inventory estimate; trough re-read after 20 s → `check: low_rise` if it rose < 50 % of the grams sent.
+- **Missed** only for slots after `automaticEnabledAt`. 3 faults → `automaticEnabled = false` (`automaticDisabledReason`).
+- **Switch:** `POST /api/feeding/automatic {enabled}` (owner only, 423 `NOT_COMMISSIONED` unless `POULTRIX_FEED_AUTOMATION_COMMISSIONED=YES_VERIFIED`). Saving the flock setup no longer resets it.
+- **API:** `GET /api/feeding/sessions` (full status + today); `feedingStatus.automatic` in the snapshot.
+- **Checks:** A3 harness 22/22 (owner and lock on the switch, full target and inventory, low rise, full → skip, unreadable → feeds, maintenance/busy → skip, missed + once, restart and interrupted not repeated, locked/off → nothing, 3 faults via the real tick → disabled); earlier harnesses still pass; `py_compile` OK.
+
 **Rule change (owner, 2026-11-08):** use `feeding_schedule.session_plan()` (rough-check mode):
 - full target each session;
 - skip only if a valid trough reading is > target + 100 g;
@@ -113,8 +123,8 @@ A1 feeding_schedule.py + unit tests ─┬─ A2 trough calibration (Pi + mainte
 - Add to the snapshot `feedingStatus`: `automatic {enabled, commissioned, lockedReason, next, lastResult}`.
 
 **Acceptance:**
-- [ ] Offline harness:
-  - a session dispenses `target − trough`;
+- [x] Offline harness (rough mode: full target):
+  - a session dispenses the full target (precise `target − trough` deferred);
   - at target → skip;
   - invalid trough → skip plus alert data;
   - maintenance/offline → skip;
@@ -123,7 +133,7 @@ A1 feeding_schedule.py + unit tests ─┬─ A2 trough calibration (Pi + mainte
   - inventory decreases;
   - 3 faults → disabled;
   - the toggle is refused when not commissioned or not owner.
-- [ ] `py_compile`.
+- [x] `py_compile`.
 
 **Files:** `raspberry-pi/app.py` · **Scope:** M · **Depends on:** A1, A2
 

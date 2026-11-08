@@ -2782,6 +2782,12 @@ def feeding_status():
                   "events": list(feeding_events), "pending": feeding_pending}
     with state_lock:
         result["connected"] = bool(state["connected"])
+    try:
+        status = automatic_feeding_status()
+        result["automatic"] = {k: status[k] for k in ("enabled", "commissioned", "active", "lockedReason",
+                                                      "disabledReason", "next", "last", "faultStreak", "targetGrams")}
+    except Exception as exc:  # never break the snapshot
+        result["automatic"] = {"error": str(exc)}
     return jsonify(result)
 
 @app.route("/api/feeding/dispense", methods=["POST"])
@@ -3034,7 +3040,7 @@ feed_config_lock = threading.Lock()
 def _read_feed_config():
     try:
         result = _json.loads(FEED_CONFIG_PATH.read_text())
-        return {**DEFAULT_FEED_CONFIG, **result, "automaticEnabled": False}
+        return {**DEFAULT_FEED_CONFIG, **result, "automaticEnabled": bool(result.get("automaticEnabled"))}
     except (OSError, ValueError, TypeError):
         return dict(DEFAULT_FEED_CONFIG)
 
@@ -3079,10 +3085,13 @@ def feeding_config_api():
                 raise ValueError("Times must be HH:MM")
             if len(set(times)) != len(times):
                 raise ValueError("Duplicate schedule times")
-            config = {"birdCount": count, "batchStartDate": start, "times": sorted(times),
-                      "timezone": "Asia/Manila", "automaticEnabled": False}
             with feed_config_lock:
-                previous_start = _read_feed_config().get("batchStartDate")
+                saved = _read_feed_config()
+                previous_start = saved.get("batchStartDate")
+                # Saving the flock setup never changes the automatic-feeding switch.
+                config = {"birdCount": count, "batchStartDate": start, "times": sorted(times),
+                          "timezone": "Asia/Manila", "automaticEnabled": bool(saved.get("automaticEnabled")),
+                          **({"automaticEnabledAt": saved["automaticEnabledAt"]} if saved.get("automaticEnabledAt") else {})}
                 FEED_CONFIG_PATH.write_text(_json.dumps(config, indent=2))
         except (ValueError, TypeError) as exc:
             return jsonify({"success": False, "error": str(exc)}), 400
@@ -3278,35 +3287,211 @@ def feed_job_stop_api():
     sent=send_command("FEED:STOP")
     return jsonify(success=sent,status="stop_requested"),202 if sent else 503
 
-# Automatic scheduling is guarded by commissioning AND a saved explicit enable flag.
-# Each local-date session is attempted once. Missed sessions are not replayed.
-feed_schedule_attempted=set()
+# ============================================================
+# AUTOMATIC FEEDING (SPEC-auto-feeding A3, rough-check mode)
+# ============================================================
+# Locked unless BOTH the Pi env POULTRIX_FEED_AUTOMATION_COMMISSIONED=YES_VERIFIED
+# (set only after the supervised Checkpoint F-B) AND the owner's switch
+# (feeding_config.json automaticEnabled). Each session: full target unless a
+# valid trough reading shows target + 100 g (feeding_schedule.session_plan).
+# Every session is persisted BEFORE dispensing so a restart can never repeat it.
+FEED_SESSIONS_PATH = _Path(__file__).with_name("feeding_sessions.json")
+FEED_AFTER_CHECK_SECONDS = 20
+FEED_LOW_RISE_FRACTION = 0.5
+feed_sessions_lock = threading.Lock()
+feed_sessions = feeding_schedule.load_sessions(FEED_SESSIONS_PATH)
+
+
+def _manila_now():
+    return _datetime.now(_ZoneInfo("Asia/Manila"))
+
+
+def _save_feed_sessions():
+    try:
+        feeding_schedule.save_sessions(FEED_SESSIONS_PATH, feed_sessions)
+    except OSError as error:
+        print(f"[FEED AUTO] could not save sessions: {error}", flush=True)
+
+
+def _put_session(record):
+    """Insert or replace the record for (date, time), then persist."""
+    global feed_sessions
+    with feed_sessions_lock:
+        kept = [r for r in feed_sessions if not (r.get("date") == record["date"] and r.get("time") == record["time"])]
+        feed_sessions = feeding_schedule.add_record(kept, record, _manila_now().date())
+        _save_feed_sessions()
+
+
+def automatic_feeding_status():
+    with feed_config_lock:
+        config = _read_feed_config()
+    with state_lock:
+        stage = str(state.get("stage") or "").upper()
+    plan = _feed_plan(config, stage)
+    enabled = bool(config.get("automaticEnabled"))
+    locked = None if FEED_AUTOMATION_COMMISSIONED else "not_commissioned"
+    with feed_sessions_lock:
+        sessions = list(feed_sessions)
+    today = _manila_now().date()
+    due = feeding_schedule.due_session(_manila_now(), plan.get("times") or [], feeding_schedule.done_times(sessions, today))
+    return {"enabled": enabled, "commissioned": FEED_AUTOMATION_COMMISSIONED, "active": enabled and not locked,
+            "lockedReason": locked, "enabledAt": config.get("automaticEnabledAt"),
+            "disabledReason": config.get("automaticDisabledReason"),
+            "stage": stage or None, "targetGrams": plan.get("targetGrams"), "times": plan.get("times") or [],
+            "next": due["next"], "today": [r for r in sessions if r.get("date") == today.isoformat()],
+            "last": sessions[-1] if sessions else None,
+            "faultStreak": feeding_schedule.fault_streak(sessions),
+            "mode": "rough_check", "fullMarginGrams": feeding_schedule.FULL_MARGIN_GRAMS}
+
+
+def _set_automatic(enabled, reason=None):
+    with feed_config_lock:
+        config = _read_feed_config()
+        config["automaticEnabled"] = bool(enabled)
+        if enabled:
+            config["automaticEnabledAt"] = _manila_now().isoformat()
+            config.pop("automaticDisabledReason", None)
+        elif reason:
+            config["automaticDisabledReason"] = reason
+        FEED_CONFIG_PATH.write_text(_json.dumps(config, indent=2))
+
+
+def _decrease_inventory(compartment, grams):
+    with inventory_lock:
+        data = _inventory_read()
+        for item in data.get("compartments", []):
+            if item.get("id") == compartment and isinstance(item.get("estimatedGrams"), (int, float)):
+                item["estimatedGrams"] = max(0.0, round(item["estimatedGrams"] - grams, 1))
+        _inventory_write(data)
+
+
+def _wait_feed_job(timeout):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with feed_job_lock:
+            status, error = feed_job.get("status"), feed_job.get("error")
+        if status in ("completed", "fault", "stopped"):
+            return status, error
+        time.sleep(0.5)
+    return "fault", "Feeding job did not finish in time"
+
+
+def run_feeding_session(slot, now):
+    """One scheduled session. Returns the final record."""
+    with feed_config_lock:
+        config = _read_feed_config()
+    with state_lock:
+        stage = str(state.get("stage") or "").upper()
+        ready = controller_ready_locked()
+    plan = _feed_plan(config, stage)
+    target = plan.get("targetGrams")
+    base = dict(now=now, slot=slot, stage=stage or None, target=target)
+
+    def record(result, reason, trough=None, dispensed=0, **extra):
+        rec = feeding_schedule.make_record(base["now"], slot, base["stage"], target, trough, dispensed, result, reason, **extra)
+        _put_session(rec)
+        print(f"[FEED AUTO] {slot} {result}: {reason} (target {target}, trough {trough}, dispensed {dispensed})", flush=True)
+        return rec
+
+    if stage not in ("STARTER", "GROWER", "FINISHER") or not target:
+        return record("skipped", "no_stage_or_target")
+    if bypass_active():
+        return record("skipped", "maintenance_active")
+    if not ready:
+        return record("skipped", "controller_not_ready")
+    if _feeding_busy():
+        return record("skipped", "feeding_busy")
+    with inventory_lock:
+        compartment = _inventory_snapshot(_inventory_read()).get("selectedCompartment")
+    if compartment not in FEED_RATES:
+        return record("skipped", "no_stage_compatible_compartment")
+    reading = trough_feeding_reading()
+    trough_before = reading.get("grams") if reading.get("valid") else None
+    decision = feeding_schedule.session_plan(target, reading, FEED_RATES[compartment])
+    if decision["action"] == "skip":
+        return record("skipped", decision["reason"], trough_before)
+    # Persist first: an interrupted session is never repeated.
+    record("fault", "interrupted", trough_before, compartment=compartment)
+    result, status = _start_feed_job(compartment, float(decision["grams"]), "automatic")
+    if status != 202:
+        return record("fault", str(result.get("error") or f"start refused ({status})"), trough_before, compartment=compartment)
+    job_status, job_error = _wait_feed_job(decision["seconds"] + 30)
+    if job_status != "completed":
+        return record("fault", job_error or job_status, trough_before, compartment=compartment)
+    _decrease_inventory(compartment, decision["grams"])
+    time.sleep(FEED_AFTER_CHECK_SECONDS)
+    after = trough_feeding_reading()
+    trough_after = after.get("grams") if after.get("valid") else None
+    check = None
+    if trough_before is not None and trough_after is not None and \
+            trough_after - trough_before < FEED_LOW_RISE_FRACTION * decision["grams"]:
+        check = "low_rise"  # feed may not have reached the trough (empty hopper / jammed gate?)
+    return record("partial" if decision["partial"] else "dispensed", decision["reason"], trough_before,
+                  decision["grams"], compartment=compartment, troughAfter=trough_after, check=check,
+                  troughReadable=decision["troughReadable"])
+
+
+def feed_schedule_tick():
+    """One scheduler pass: record missed sessions, run a due one."""
+    if not FEED_AUTOMATION_COMMISSIONED:
+        return
+    with feed_config_lock:
+        config = _read_feed_config()
+    if not config.get("automaticEnabled"):
+        return
+    now = _manila_now()
+    with state_lock:
+        stage = str(state.get("stage") or "").upper()
+    times = _feed_plan(config, stage).get("times") or []
+    with feed_sessions_lock:
+        done = feeding_schedule.done_times(feed_sessions, now.date())
+    due = feeding_schedule.due_session(now, times, done)
+    enabled_at = config.get("automaticEnabledAt")
+    for slot in due["missed"]:
+        start = now.replace(hour=int(slot[:2]), minute=int(slot[3:]), second=0, microsecond=0)
+        if enabled_at and start.isoformat() < enabled_at:
+            continue  # before automation was switched on: not a miss
+        _put_session(feeding_schedule.make_record(now, slot, stage or None, None, None, 0, "missed", "pi_or_controller_unavailable"))
+    if due["due"]:
+        run_feeding_session(due["due"], now)
+        with feed_sessions_lock:
+            disable = feeding_schedule.should_disable(feed_sessions)
+        if disable:
+            _set_automatic(False, "3_consecutive_faults")
+            print("[FEED AUTO] disabled after 3 consecutive faults", flush=True)
+
+
 def feed_schedule_worker():
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
     while True:
         time.sleep(5)
-        if not FEED_AUTOMATION_COMMISSIONED: continue
         try:
-            config=_read_feed_config()
-            if not config.get("automaticEnabled"): continue
-            now=datetime.now(ZoneInfo("Asia/Manila"))
-            slot=now.strftime("%H:%M")
-            day=now.date().isoformat()
-            with state_lock: stage=str(state.get("stage") or "").upper()
-            plan=_feed_plan(config,stage)
-            if slot not in plan["times"] or not plan.get("targetGrams"): continue
-            key=(day,slot)
-            if key in feed_schedule_attempted: continue
-            feed_schedule_attempted.add(key)
-            with inventory_lock: compartment=_inventory_snapshot(_inventory_read()).get("selectedCompartment")
-            if compartment is not None:
-                _start_feed_job(compartment,float(plan["targetGrams"]),"automatic")
-            if len(feed_schedule_attempted)>100:
-                feed_schedule_attempted.intersection_update({x for x in feed_schedule_attempted if x[0]==day})
+            feed_schedule_tick()
         except Exception as exc:
-            print("[FEED SCHEDULE]",exc,flush=True)
-threading.Thread(target=feed_schedule_worker,daemon=True).start()
+            print("[FEED AUTO] worker error:", exc, flush=True)
+
+
+@app.route("/api/feeding/sessions", methods=["GET"])
+def feeding_sessions_api():
+    return jsonify(automatic_feeding_status())
+
+
+@app.route("/api/feeding/automatic", methods=["POST"])
+def feeding_automatic_api():
+    """Owner-only switch. Effective only when the Pi is commissioned."""
+    if request_user().lower() not in _owner_emails():
+        return jsonify(error="Only the farm owner can do this", code="OWNER_ONLY"), 403
+    enabled = (request.get_json(silent=True) or {}).get("enabled")
+    if type(enabled) is not bool:
+        return jsonify(error="enabled must be true or false"), 400
+    if enabled and not FEED_AUTOMATION_COMMISSIONED:
+        return jsonify(error="Automatic feeding is locked until the supervised test (Checkpoint F-B) is passed",
+                       code="NOT_COMMISSIONED"), 423
+    _set_automatic(enabled, None if enabled else "turned_off_by_owner")
+    print(f"[AUDIT] automatic feeding {'ON' if enabled else 'OFF'} by {request_user()}", flush=True)
+    return jsonify(automatic_feeding_status())
+
+
+threading.Thread(target=feed_schedule_worker, daemon=True).start()
 
 # ============================================================
 # PERSISTENT READ-ONLY TELEMETRY HISTORY (SQLite)
@@ -3557,7 +3742,7 @@ def _inventory_snapshot(data):
             "combinedActualGrams": measured, "combinedWeightStatus": weight.get("status"),
             "combinedEstimatedGrams": estimated_total,
             "discrepancyGrams": round(measured-estimated_total,1) if measured is not None and estimated_total is not None else None,
-            "automaticFeedingEnabled": False,
+            "automaticFeedingEnabled": bool(_read_feed_config().get("automaticEnabled")) and FEED_AUTOMATION_COMMISSIONED,
             "alerts": ([{"type":"NO_COMPATIBLE_FEED", "message":"No suitable feed compartment for the current stage"}] if not eligible else []) +
                       [{"type":"LOW_FEED", "compartment": c["id"], "message":"Estimated compartment inventory is low"} for c in entries if c["lowFeed"]] +
                       ([{"type":"INVENTORY_DISCREPANCY", "message":"Combined sensor weight differs from estimated inventory"}] if measured is not None and estimated_total is not None and abs(measured-estimated_total)>500 else [])}
