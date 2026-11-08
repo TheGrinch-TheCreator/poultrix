@@ -63,6 +63,8 @@ void clearManualOverrides() {
   manualHeater = false;
   manualLed = false;
 }
+extern bool gateActive[];  // defined with the feed gates below
+void stopGroups();
 void maintenanceOff() {
   // Leave manual bypass and hand the outputs straight back to automatic
   // control. Never switch everything off just because maintenance ended.
@@ -70,8 +72,9 @@ void maintenanceOff() {
   clearManualOverrides();
   lcdSimTemperature = false;
   lcdSimHopper = false;
-  stopGroups();
-  for (uint8_t i = 0; i < GATE_COUNT; i++) closeGate(i, "STOPPED");
+  // Close maintenance-opened servos, but never cut a feed that is running.
+  if (!gateActive[0] && !gateActive[1]) stopGroups();
+  for (uint8_t i = 0; i < GATE_COUNT; i++) if (!gateActive[i]) closeGate(i, "STOPPED");
   readLiveSensors();
   controlTemperature();
   controlLiveLighting();
@@ -264,7 +267,9 @@ bool handleFeedCommand(String command) {
     Serial.println(F("FEED_ERROR:PI_OFFLINE"));
     return true;
   }
-  if (!MANUAL_FEEDING_ENABLED || maintenanceActive || groupRunning) {
+  // Maintenance never blocks feeding (owner 2026-11-08); only a running
+  // maintenance gate/hole test does, because it uses the same servos.
+  if (!MANUAL_FEEDING_ENABLED || groupRunning) {
     Serial.println(F("FEED_ERROR:DISABLED"));
     return true;
   }

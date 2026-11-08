@@ -1957,9 +1957,15 @@ def pause_bypass_on_serial_loss():
     simulation_clear()
     bypass_ack_event.set()  # Unblock an in-flight request; it will fail ACK check.
 
+def _feed_job_running():
+    with feed_job_lock:
+        return feed_job.get("status") in ("starting", "running")
+
+
 def bypass_shutdown():
     global bypass_token,bypass_expires,bypass_paused,bypass_connection_lost_at
-    send_command("FEED:STOP")
+    if not _feed_job_running():  # never cut a running feed when maintenance ends
+        send_command("FEED:STOP")
     bypass_send_confirmed("BYPASS:OFF", "BYPASS_ACK:OFF")
     with bypass_lock:
         bypass_token=None;bypass_expires=0.0;bypass_paused=False;bypass_connection_lost_at=None
@@ -2373,7 +2379,8 @@ def bypass_return_live():
     # Cancel countdown before changing controller mode.
     cancel_schedule_test()
     # Clear physical manual overrides first, without invalidating the login token.
-    if not send_command("FEED:STOP"):
+    # A running feed (manual or scheduled) is left to finish.
+    if not _feed_job_running() and not send_command("FEED:STOP"):
         return jsonify(error="Arduino unavailable; overrides not cleared"),503
     if not bypass_send_confirmed("BYPASS:OFF", "BYPASS_ACK:OFF"):
         return jsonify(error="Arduino did not confirm return to automatic control"),503
@@ -3190,8 +3197,8 @@ def _feed_inputs(target, compartment):
     with state_lock:
         ready = controller_ready_locked()
         record = dict(state.get("troughWeight") or {})
-    if not ready or bypass_active():
-        raise RuntimeError("Online healthy hardware required; hardware busy, try again in a few minutes")
+    if not ready:
+        raise RuntimeError("Online healthy hardware required; try again in a few minutes")
     rate = FEED_RATES.get(compartment)
     if not isinstance(rate, (int, float)) or not math.isfinite(rate) or rate <= 0:
         raise RuntimeError("Invalid dispensing rate")
@@ -3228,7 +3235,7 @@ def _feed_job_run(compartment, target, source, calculation):
             # Never continue a job if the controller goes offline or unhealthy.
             with state_lock:
                 healthy = controller_ready_locked()
-            if not healthy or bypass_active():
+            if not healthy:
                 raise RuntimeError("Controller not ready during dispensing")
             ms = min(10000, remaining_ms)
             with feeding_lock:
@@ -3420,8 +3427,6 @@ def run_feeding_session(slot, now):
 
     if stage not in ("STARTER", "GROWER", "FINISHER") or not target:
         return record("skipped", "no_stage_or_target")
-    if bypass_active():
-        return record("skipped", "maintenance_active")
     if not ready:
         return record("skipped", "controller_not_ready")
     if _feeding_busy():

@@ -188,7 +188,14 @@ A1 feeding_schedule.py + unit tests ─┬─ A2 trough calibration (Pi + mainte
   - A 157.5 g session is now a **0.849 s** gate; the minimum is about 65 g.
   - Tests: 30 unit tests, all 6 harnesses.
   - Deployed: Pi `app.py` `24e229d3`, `feeding_schedule.py` `bbbab912`.
-- **Next:** one confirmation dispense at the new model (hopper drop ≈ 158 g?); Test 2 (500 g weight → skip, or feed if unreadable); Test 3 (maintenance open → skip); then restore times and decide on commissioning.
+- **Confirmation runs at the new model (0.853 s):** about 99 g and about 117 g, but **compartment 2 had run empty** (hopper total about 1.0 kg, readings disturbed). Not valid; the model stands on the 4 earlier points. The owner moved on.
+- **Test 2 (15:08): PASS.** Trough read 973.4 g (valid) > 257.5 g → skipped `trough_full`, no gate.
+- **Owner decision during F-B: maintenance never blocks feeding.**
+  - Firmware: `FEED:DISPENSE` is allowed in maintenance; only `groupRunning` (a maintenance gate/hole test) blocks it; `maintenanceOff` doesn't close active feed gates.
+  - Pi: removed the maintenance blocks in `_feed_inputs`, `_feed_job_run` and `run_feeding_session`; Exit / Return to automatic don't send `FEED:STOP` while a feed job runs.
+  - A3 harness updated ("maintenance open → still feeds"); all harnesses pass.
+  - **Deploy:** the first flash attempt (15:12) **failed**: the USB hub disabled the port ("EMI?") during the backup read, avrdude hung, nothing was written, and the service was down 15:12–15:18 (Arduino on its own; the 15:14 session skipped `controller_not_ready`). Retry 15:19 (write only, timeout, rollback hex ready): **flash+verify OK** (hex `81a0306b`); Pi `app.py` `56d67d9f`; LIVE.
+- **Next:** Test 3 (feed during maintenance); restore the normal times; owner decides on commissioning; Test 2 (500 g weight → skip, or feed if unreadable); Test 3 (maintenance open → skip); then restore times and decide on commissioning.
 
 - [ ] Set the Pi commissioning flag temporarily, with a test session time a few minutes ahead. Empty trough → about the target is dispensed; weigh it on a kitchen scale.
 - [ ] Trough above the target → skipped with a reason.

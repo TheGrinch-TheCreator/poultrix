@@ -70,7 +70,7 @@ Until the scale is fixed, the owner chose **option 2 + (a)**:
 3. **Scheduler** (replaces `feed_schedule_worker`):
    - **Session times:** today's times for the confirmed stage (defaults above; Q4).
    - **Late start:** a session runs if the Pi reaches it within **15 min** after its time (Q5); later ones are skipped as `missed`.
-   - **Refusal reasons**, each recorded and a skip: Arduino not ready, maintenance open, a feed job or gate already busy, no stage-compatible compartment, invalid trough.
+   - **Refusal reasons**, each recorded and a skip: Arduino not ready, a feed job or gate already busy, no stage-compatible compartment. (Maintenance no longer blocks feeding: owner decision 2026-11-08.)
    - **Persistence:** sessions are saved in `feeding_sessions.json` (`date, time, stage, target, trough, dispensed, result, reason`, last 7 days), so a restart never repeats one.
    - **After a dispense:** wait 20 s, read the trough again and record `troughAfter`. If it rose by less than 50 % of the grams sent → alert "Feed may not have reached the trough (empty hopper or jammed gate?)". No retry.
    - **Inventory:** decrease the compartment's estimated stock by the grams sent.
@@ -129,7 +129,7 @@ python -m py_compile raspberry-pi/app.py raspberry-pi/feeding_schedule.py
   - any firmware change.
 - **Never:**
   - dispense when the trough reading is invalid;
-  - feed during maintenance or with the Pi seen offline;
+  - feed with the Pi seen offline (maintenance no longer blocks feeding, owner 2026-11-08);
   - replay old missed sessions;
   - add calibration constants in the frontend;
   - enable automation without the Pi commissioning flag.
@@ -149,3 +149,5 @@ python -m py_compile raspberry-pi/app.py raspberry-pi/feeding_schedule.py
 5. Pi offline at session time: run it if back within 15 min, otherwise missed.
 6. (Not answered) Toggle: owner account only, changeable later.
 7. Feed amounts: keep 35 / 90 / 135 g/bird/day.
+8. **Maintenance never blocks feeding** (owner, during F-B). Scheduled and manual feeds run while the maintenance site is open. Only a running maintenance gate/hole test blocks them (same servos). Leaving maintenance never cuts a feed that is running. Firmware and Pi changed accordingly.
+9. **Gate model** for compartment 2 (measured in F-B): 52.2 g per opening + 124.1 g/s.
