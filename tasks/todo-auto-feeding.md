@@ -20,6 +20,11 @@ A1 feeding_schedule.py + unit tests ─┬─ A2 trough calibration (Pi + mainte
 - **Feeding during maintenance or while the Pi is offline:** refused (and the Arduino refuses too).
 
 ## A1: Decision logic and unit tests
+**Status (2026-11-08): done.** `raspberry-pi/feeding_schedule.py` + `tests/auto-feeding/test_feeding_schedule.py`: 21 tests pass (`npm run test:auto-feeding`). Written test-first; two test-setup spacing mistakes were fixed in the tests, not the module. Notes:
+- "Fresh" means the newest sample is < 5 s old, and the 10 s window must hold ≥ 5 numeric samples.
+- Exactly 20 g is dispensed; 17.5 g is skipped.
+- Skips and misses neither count toward nor break the fault streak; a dispensed or partial session resets it.
+
 **Description:** new `raspberry-pi/feeding_schedule.py`, no hardware imports:
 - `trough_valid(samples, now)`: 5 samples ≥, all < 5 s old, spread ≤ 25 g, median ≥ −25 g (clamped to 0).
 - `session_need(target, trough_g, rate)`: SKIP_AT_TARGET, SKIP_TOO_SMALL (< 20 g), PARTIAL (10 s cap), or DISPENSE grams.
@@ -29,7 +34,7 @@ A1 feeding_schedule.py + unit tests ─┬─ A2 trough calibration (Pi + mainte
 - Fault streak → disable at 3.
 
 **Acceptance:**
-- [ ] `npm run test:auto-feeding` (new script) passes: validity edge cases, need/skip/partial/min, due/missed at 14:59/15:00/15:15/15:16, restart without repeat, the fault streak.
+- [x] `npm run test:auto-feeding` (new script) passes: validity edge cases, need/skip/partial/min, due/missed at 14:59/15:00/15:15/15:16, restart without repeat, the fault streak.
 
 **Files:** `raspberry-pi/feeding_schedule.py`, `tests/auto-feeding/test_feeding_schedule.py`, `package.json` · **Scope:** S
 
