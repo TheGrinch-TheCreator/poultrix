@@ -209,3 +209,11 @@ A1 feeding_schedule.py + unit tests ─┬─ A2 trough calibration (Pi + mainte
 **Status (2026-11-08): done.** CLAUDE.md (feeding section, env, Pi modules and state files, firmware maintenance/hole notes, routes 26/14, UI); CAPABILITY_MAP; spec marked DONE; vault: FEEDING_SYSTEM, CURRENT_STATUS, API_REFERENCE, BYPASS_MODE, ARDUINO, DEPLOYMENT, KNOWN_ISSUES, TODO, CHANGELOG, TEST_RESULTS, AD-28 to AD-30.
 
 CLAUDE.md, AGENTS.md (if rules change), vault (FEEDING_SYSTEM, API_REFERENCE, AD-28, CURRENT_STATUS, CHANGELOG, TEST_RESULTS), CAPABILITY_MAP · **Scope:** S
+
+## Follow-up 2026-11-08: hopper "not ready" flicker
+- **Cause 1 (fixed in firmware):** the LCD read the hopper HX711 itself every 1.5 s and stole conversions from the 2 s weight report → `HOPPER_WEIGHT:NOT_READY` about 19 % of the time (trough 0.3 %).
+  - Firmware: the LCD shows the last reported hopper value; the report waits up to 110 ms for a conversion (`readHx711RawWait`).
+  - Flashed 16:23 (hex `cedda118`, write-only with rollback `81a0306b` on hand): **19 % → 10 %**.
+- **Cause 2 (open):** the rest is random (no link to relays): likely hopper HX711 wiring/contacts (D3/D2, 5V, GND) or cable routing. The owner is to check it.
+- **Pi smoothing:** a missed report keeps the last good value up to 6 s (`WEIGHT_HOLD_SECONDS`, `missedReadings`); after 6 s without a good reading NOT_READY shows. Harness 7/7. **Not deployed yet** (needs the owner's "deploy").
+

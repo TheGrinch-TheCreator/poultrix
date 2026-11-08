@@ -41,6 +41,11 @@ DHT dht(DHT_PIN, DHT_TYPE);
 // always run, including when the Raspberry Pi is offline. There is no
 // SAFE or TEST mode. The Pi heartbeat (SYS:PING) only gates feeding and
 // the "Pi offline" indicator.
+// Last hopper reading from the weight report. The LCD shows this instead of
+// reading the HX711 itself: a second reader stole conversions and made the
+// report say HOPPER_WEIGHT:NOT_READY about 19 % of the time (2026-11-08).
+long lastHopperRaw = 0;
+bool hasHopperRaw = false;
 bool piOnline = false;  // set by SYS:PING; cleared by the heartbeat watchdog
 const uint8_t GATE_COUNT = 2;  // feed compartments (gates) 1 and 2
 extern unsigned long lastSensorRead;  // defined in TIMING below
@@ -452,11 +457,10 @@ void updateLCD() {
   if (piOnline) lcdLine(0, F("POULTRIX MONITOR"));
   else lcdLine(0, F("Pi: OFFLINE"));
   lcdLine(1, String(F("Stage: ")) + getStageName());
-  long raw;
   if (lcdSimHopper) {
     lcdLine(2, String(F("Hopper: ")) + String(lcdSimHopperG / 1000.0f, 2) + F(" kg*"));
-  } else if (hopperCountsPerGram != 0 && readHx711Raw(HOPPER_DOUT, HOPPER_SCK, raw)) {
-    float kg = (raw - hopperZero) / hopperCountsPerGram / 1000.0f;
+  } else if (hopperCountsPerGram != 0 && hasHopperRaw) {
+    float kg = (lastHopperRaw - hopperZero) / hopperCountsPerGram / 1000.0f;
     if (kg < 0) kg = 0;
     lcdLine(2, String(F("Hopper: ")) + String(kg, 2) + F(" kg"));
   } else {
@@ -493,13 +497,26 @@ bool handlePcaCommand(const String &command) {
 }
 
 
+// The HX711 makes about 10 conversions/s. If one isn't waiting at report
+// time, wait briefly (max 110 ms, short enough for the 64-byte serial buffer)
+// for the next instead of reporting NOT_READY.
+const unsigned long HX711_WAIT_MS = 110;
+bool readHx711RawWait(byte dout, byte sck, long &raw) {
+  unsigned long start = millis();
+  while (!readHx711Raw(dout, sck, raw)) {
+    if (millis() - start >= HX711_WAIT_MS) return false;
+    delay(2);
+  }
+  return true;
+}
 void reportOneWeight(const __FlashStringHelper *name, byte dout, byte sck,
                      long zero, float countsPerGram) {
   long raw;
   Serial.print(name);
-  if (!readHx711Raw(dout, sck, raw)) {
+  if (!readHx711RawWait(dout, sck, raw)) {
     Serial.println(F(":NOT_READY")); return;
   }
+  if (dout == HOPPER_DOUT) { lastHopperRaw = raw; hasHopperRaw = true; }
   Serial.print(F(":RAW,")); Serial.print(raw);
   if (countsPerGram == 0.0f) {
     Serial.println(F(",UNCALIBRATED")); return;

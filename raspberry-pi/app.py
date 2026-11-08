@@ -533,6 +533,12 @@ def parse_bool_list(value, count):
     return result
 
 
+# A missed HX711 report (NOT_READY) keeps the last good value this long
+# (the hopper misses about 10 % of reports, likely wiring; 2026-11-08).
+WEIGHT_HOLD_SECONDS = 6.0
+weight_last_good = {}
+
+
 def process_message(message):
     message = message.strip()
 
@@ -550,15 +556,23 @@ def process_message(message):
             sensor = "hopperWeight" if key == "HOPPER_WEIGHT" else "troughWeight"
             with state_lock:
                 current = dict(state[sensor])
-                current["status"] = parts[0]
-                current["updatedAt"] = utc_timestamp()
                 if parts[0] == "RAW" and len(parts) >= 3:
+                    current["updatedAt"] = utc_timestamp()
                     current["raw"] = int(parts[1])
                     if sensor == "troughWeight":
                         trough_raw_samples.append((time.monotonic(), current["raw"]))
                     current["status"] = parts[2]
                     current["weightGrams"] = float(parts[3]) if parts[2] == "ESTIMATED" and len(parts) >= 4 else None
+                    current["missedReadings"] = 0
+                    weight_last_good[sensor] = time.monotonic()
+                elif (parts[0] == "NOT_READY" and current.get("raw") is not None
+                      and time.monotonic() - weight_last_good.get(sensor, 0) <= WEIGHT_HOLD_SECONDS):
+                    # The load cell missed one report: keep the last good value
+                    # for a few seconds instead of flickering to "not ready".
+                    current["missedReadings"] = int(current.get("missedReadings") or 0) + 1
                 else:
+                    current["status"] = parts[0]
+                    current["updatedAt"] = utc_timestamp()
                     current["weightGrams"] = None
                 state[sensor] = current
         except (ValueError, TypeError, IndexError):
