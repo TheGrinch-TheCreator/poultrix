@@ -1,9 +1,9 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import flockImg from "@/assets/flock-camera.jpg";
 import loginVideo from "@/assets/poultrix-login-bg.mp4";
 import poultrixLogo from "@/assets/poultrix-logo-login.png";
+import poultrixLogoLight from "@/assets/poultrix-logo-light.png";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -59,32 +59,49 @@ function LoginPage() {
     setBusy(false);
   }
 
+  // Only large screens show (and download) the 6.9 MB montage video.
+  const [wideScreen, setWideScreen] = useState(false);
+  useEffect(() => {
+    const query = window.matchMedia("(min-width: 1024px)");
+    const update = () => setWideScreen(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+
   return (
-    <div className="grid min-h-screen lg:grid-cols-2">
-      {/* System montage: looping, muted video (still image if the viewer prefers reduced motion).
-          On phones it's a banner above the form; on large screens the left half. */}
-      <div className="relative h-64 overflow-hidden sm:h-80 lg:h-auto">
-        <img src={flockImg} alt="" className="absolute inset-0 h-full w-full object-cover" />
-        <video
-          src={loginVideo}
-          poster={flockImg}
-          autoPlay
-          muted
-          loop
-          playsInline
-          preload="auto"
-          aria-hidden="true"
-          className="absolute inset-0 h-full w-full object-cover motion-reduce:hidden"
-        />
-        {/* Blue gradient + blur at the bottom so the logo and text stay readable. */}
+    <div className="grid min-h-screen content-start lg:grid-cols-2 lg:content-stretch">
+      {/* Phones: just the logo at the top. Light theme uses a copy with a dark subtitle
+          (the original's subtitle is white); dark theme uses the original. */}
+      <div className="flex justify-center px-6 pt-10 pb-2 lg:hidden">
+        <img src={poultrixLogoLight} alt="POULTRIX" className="w-64 max-w-full dark:hidden" />
+        <img src={poultrixLogo} alt="POULTRIX" className="hidden w-64 max-w-full dark:block" />
+      </div>
+      {/* Large screens (layout per src/assets/login-preview.jpg): dark navy panel, the
+          looping montage near the top fading into the navy, logo + text at the bottom. */}
+      <div className="relative hidden overflow-hidden bg-[#12172a] lg:block">
         <div
-          className="absolute inset-x-0 bottom-0 h-3/4 backdrop-blur-md"
-          style={{ maskImage: "linear-gradient(to top, black 35%, transparent)", WebkitMaskImage: "linear-gradient(to top, black 35%, transparent)" }}
-        />
-        <div className="absolute inset-x-0 bottom-0 h-3/4 bg-gradient-to-t from-[#06215a]/95 via-[#0b3c8f]/60 to-transparent" />
-        <div className="relative flex h-full flex-col justify-end p-6 text-white lg:p-12">
-          <img src={poultrixLogo} alt="POULTRIX" className="w-56 drop-shadow-lg sm:w-72 lg:w-[26rem]" />
-          <p className="mt-3 max-w-md text-sm opacity-95 drop-shadow sm:text-base lg:text-lg">Know how your chickens are doing — feeding, temperature and growth — in seconds.</p>
+          className="absolute inset-x-0 top-[4%]"
+          style={{ maskImage: "linear-gradient(to bottom, black 60%, transparent)", WebkitMaskImage: "linear-gradient(to bottom, black 60%, transparent)" }}
+        >
+          {wideScreen ? (
+            <video
+              src={loginVideo}
+              autoPlay
+              muted
+              loop
+              playsInline
+              preload="auto"
+              aria-hidden="true"
+              className="block h-auto w-full motion-reduce:hidden"
+            />
+          ) : null}
+        </div>
+        {/* Soft navy fade at the bottom so the logo and text stay readable. */}
+        <div className="absolute inset-x-0 bottom-0 h-3/5 bg-gradient-to-t from-[#090d19]/95 via-[#12172a]/50 to-transparent" />
+        <div className="relative flex h-full flex-col justify-end p-12 text-white">
+          <img src={poultrixLogo} alt="POULTRIX" className="w-[26rem] max-w-full drop-shadow-lg" />
+          <p className="mt-3 max-w-md text-lg opacity-95 drop-shadow">Know how your chickens are doing — feeding, temperature and growth — in seconds.</p>
         </div>
       </div>
       <div className="flex items-center justify-center p-6">
