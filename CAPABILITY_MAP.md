@@ -10,6 +10,7 @@ Each module gets its own `SPEC-<module-id>.md` at the repo root. This map is the
 | `maintenance-site` | Separate bypass-only site, entered with the bypass password, with live camera view. Bypass button removed from Settings. | `always-live`, `remote-access` | **done 2026-11-07** (M1–M4; M-A passed) |
 | `stage-schedule` | Day-gated AI analysis: Starter at batch start, Grower from day 11 (retry daily), Finisher from day 25 (retry daily). Batch start date set on the Flock page. | — | `SPEC-stage-schedule.md` (approved 2026-11-08); tasks `tasks/todo-stage-schedule.md` (S1–S4) |
 | `auto-feeding` | Unattended scheduled feeding for the confirmed stage: dispense = target − trough weight (min 0); skip the session if trough ≥ target. 10 s / ~1 kg cap kept. | `always-live` | not written |
+| `system-power` | Safe reboot and timed power-off (Pi 5 RTC wake alarm) from the main site's Settings. | `remote-access` | `SPEC-system-power.md` (approved 2026-11-08); tasks `tasks/todo-system-power.md` (P1–P3) |
 
 Build order: `always-live` → `remote-access` → `maintenance-site`; `stage-schedule` → `auto-feeding` (may run in parallel with the first track; `auto-feeding` ships only after `remote-access` login protects controls).
 

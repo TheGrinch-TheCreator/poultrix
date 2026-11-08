@@ -160,7 +160,8 @@ S1 stage_schedule.py + unit tests ── S2 app.py wiring ── Pi deploy ─�
 
 **Checks:**
 - Login on the Pi with the heater off: `BYPASS_ACK:ON` at once, relays unchanged during and after; exit OK.
-- Heater-on login test and 10-minute relay-change count: running.
+- **Heater-on login test** (09:26:48, 32.1 °C, heater on): `BYPASS_ACK:ON` at once; the heater stayed on and nothing else switched; exit OK.
+- **Relay changes 09:23:41–09:36:59:** heater 2, fans 0, LED 0; serial freezes 0. Before: about 10 heater flips at 09:04–09:05.
 
 **Console text:** updated to match (entering changes nothing; test values only on the maintenance site). Deployed: Worker `maintenance` `4080c248`.
 
