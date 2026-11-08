@@ -72,6 +72,14 @@ A1 feeding_schedule.py + unit tests ─┬─ A2 trough calibration (Pi + mainte
 **Files:** `raspberry-pi/app.py`, `src/lib/server/pi-gateway.ts`, `tests/pi-gateway/*`, `maintenance-site/src/Console.tsx` · **Scope:** M · **Depends on:** A1 (validity helper)
 
 ### Checkpoint F-A (owner at the farm)
+**Second attempt (2026-11-08 12:01–12:20):**
+- **Zero and 500 g check:** both accepted. Factor **91.936 counts/g** (+9.5 % vs 83.97); zero 328,785.
+- **5-min watch (12:04–12:09):** valid 30/30, but the median ranged 0–56 g (target ±25 g) → not passed.
+- **Firmware averaging tried (hex `642dce8c`, flashed 12:16) → bad readings** (empty trough 300–760 g, ±100 g). **Rolled back** at about 12:18 to `flash_before_weight_avg_20261108_121604.hex`; repo source reverted. Not to be re-flashed until bench-tested.
+- **With the old firmware, empty trough:** stdev 6 g but **+67…+90 g** at 12:18 and creeping up (0 at 12:01). **The zero drifts about 80 g in 17 min.** Likely mounting, cable tension, heat or debris; the owner is checking.
+- **Pi:** the feeding reading uses a **30 s window** (about 15 readings, median) (`feeding_schedule.py` `c0ae7af2`, deployed).
+- **Next:** the owner re-zeroes and leaves the trough untouched for 20 min, then we measure the drift. A3 is on hold until the trough is steady.
+
 **First attempt (2026-11-08 11:48–11:49): Zero trough refused "unstable" every time.**
 - Measured over 90 s with the trough still: single readings scatter ±14 g (stdev), and the max−min of any 10 readings is about 57 g. The medians of 10 readings stayed within about 13 g.
 - **Fix:** stability is now judged by the **standard deviation ≤ 25 g** (Pi zero/check and `feeding_schedule.trough_valid`), and the value is the median.

@@ -58,8 +58,8 @@ class TroughValid(unittest.TestCase):
     def test_too_few_or_stale(self):
         self.assertEqual(fs.trough_valid(samples([40, 41, 42, 40]), 100.0)["reason"], "too_few_samples")
         self.assertEqual(fs.trough_valid(samples([40, 41, 42, 40, 41], newest_age=6.0, step=0.5), 100.0)["reason"], "stale")
-        # samples older than the 10 s window are ignored
-        old = samples([40, 41, 42, 40, 41], newest_age=30.0)
+        # samples older than the 30 s window are ignored
+        old = samples([40, 41, 42, 40, 41], newest_age=40.0)
         self.assertEqual(fs.trough_valid(old, 100.0)["reason"], "too_few_samples")
         self.assertEqual(fs.trough_valid([], 100.0)["reason"], "too_few_samples")
 

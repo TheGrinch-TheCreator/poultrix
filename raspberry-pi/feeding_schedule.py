@@ -25,7 +25,7 @@ try:
 except ZoneInfoNotFoundError:  # e.g. Windows without tzdata; Manila is UTC+8, no DST
     TZ = timezone(timedelta(hours=8), "Asia/Manila")
 
-TROUGH_WINDOW_SECONDS = 10.0
+TROUGH_WINDOW_SECONDS = 30.0  # about 15 averaged firmware reports (one per 2 s)
 TROUGH_MIN_SAMPLES = 5
 TROUGH_MAX_AGE_SECONDS = 5.0
 # The HX711 is read once per 2 s without averaging: single readings scatter
@@ -47,7 +47,7 @@ def _number(value):
 
 def trough_valid(samples, now, commissioned=True):
     """samples: [(monotonic_time, grams)]. Valid only if >= 5 numeric samples
-    in the last 10 s, the newest < 5 s old, standard deviation <= 25 g and
+    in the last 30 s, the newest < 5 s old, standard deviation <= 25 g and
     median >= -25 g.
     Returns {valid, grams, reason}."""
     if not commissioned:
