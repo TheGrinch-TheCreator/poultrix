@@ -7,7 +7,8 @@ import { piErrorMessage, piJson } from "@/lib/pi-client";
 import { usePiSnapshot } from "@/lib/pi-snapshot";
 
 const STORAGE_KEY = "poultrix_power_action";
-const WAKE_MINUTES = [5, 15, 30] as const;
+// Timed power-off (RTC wake) is disabled: the Pi did not wake in Checkpoint P-A
+// (2026-11-08). Power off always stays off until it is fixed and re-tested.
 // The Pi needs well over this long to go down and come back, so a successful
 // snapshot after it means the Pi is really back (not the last poll before shutdown).
 const BACK_ONLINE_AFTER_MS = 45_000;
@@ -44,7 +45,6 @@ const timeText = (iso: string | null) =>
 export function SystemPowerCard() {
   const { snapshot, error, updatedAt } = usePiSnapshot();
   const [pending, setPending] = useState<PendingAction | null>(null);
-  const [choice, setChoice] = useState<string>("5");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -75,14 +75,11 @@ export function SystemPowerCard() {
   const dispensing = Object.values(gates).some((gate) => gate?.status === "DISPENSING");
 
   async function run(action: PendingAction["action"]) {
-    const stayOff = action === "power-off" && choice === "stay";
-    const minutes = action === "power-off" && !stayOff ? Number(choice) : null;
+    const stayOff = action === "power-off";
     const prompt =
       action === "reboot"
         ? "Restart the system now?\n\nThe site goes offline for about 2 minutes. Feeding is stopped first, and climate control pauses briefly while the Arduino restarts."
-        : stayOff
-          ? "Power off and STAY OFF?\n\nNothing can turn it back on remotely. Someone must press the Raspberry Pi's power button or unplug and replug it.\n\nThe Arduino is powered by the Pi: the heater and fans may stay OFF until then. Chicks may get cold or hot."
-          : `Power off for ${minutes} minutes?\n\nIt turns itself back on automatically after about ${minutes} minutes.\n\nThe Arduino is powered by the Pi: the heater and fans may stay OFF until then.`;
+        : "Power off and STAY OFF?\n\nNothing can turn it back on remotely. Someone must press the Raspberry Pi's power button or unplug and replug it.\n\nThe Arduino is powered by the Pi: the heater, fans and LCD go OFF until then. Chicks may get cold or hot.";
     if (!window.confirm(prompt)) return;
     setBusy(true);
     setMessage(null);
@@ -90,7 +87,7 @@ export function SystemPowerCard() {
       const body =
         action === "reboot"
           ? { confirm: "REBOOT" }
-          : { confirm: "POWEROFF", minutes, ...(stayOff ? { stayOff: true } : {}) };
+          : { confirm: "POWEROFF", minutes: null, stayOff };
       const result = await piJson<PowerResponse>(
         action === "reboot" ? "/system/reboot" : "/system/power-off",
         { body },
@@ -141,28 +138,12 @@ export function SystemPowerCard() {
         >
           Restart system
         </button>
-        <label className="flex items-center gap-2 text-sm">
-          <span className="text-muted-foreground">Power off</span>
-          <select
-            className="rounded-lg border bg-background px-2 py-2 text-sm"
-            value={choice}
-            onChange={(event) => setChoice(event.target.value)}
-            disabled={busy || !!pending}
-          >
-            {WAKE_MINUTES.map((value) => (
-              <option key={value} value={String(value)}>
-                for {value} minutes
-              </option>
-            ))}
-            <option value="stay">and stay off</option>
-          </select>
-        </label>
         <button
           className="rounded-lg border border-danger/50 px-4 py-2 text-sm font-medium text-danger disabled:opacity-40 hover:bg-danger/10"
           disabled={busy || dispensing || !!pending}
           onClick={() => void run("power-off")}
         >
-          Power off
+          Power off (stays off)
         </button>
       </div>
       {dispensing && (
@@ -171,8 +152,9 @@ export function SystemPowerCard() {
         </p>
       )}
       <p className="mt-3 text-xs text-muted-foreground">
-        The Arduino is powered by the Raspberry Pi, so the heater and fans may stop while the Pi is
-        off. Keep power-offs short.
+        The Arduino is powered by the Raspberry Pi, so the heater, fans and LCD go off while the Pi
+        is off. After a power-off, someone at the farm must turn it back on (Pi power button, or
+        unplug and replug).
       </p>
       {message && <p className="mt-2 text-sm">{message}</p>}
     </Card>

@@ -92,6 +92,23 @@ P2 gateway owner-only routes ─────┴─ P3 Settings card ── deplo
 - Set the Worker secret `POULTRIX_OWNER_EMAILS` and the Pi env `POULTRIX_OWNER_EMAILS`, back up `app.py`, deploy the Pi and the Worker `app`.
 
 ### Checkpoint P-A (owner at the farm)
+**Results 2026-11-08 (owner at the farm):**
+- **Deploy before the test:** Pi `app.py` `6b33d033` (backup first) and `POULTRIX_OWNER_EMAILS` in `/etc/systemd/system/poultrix.service.d/owner.conf`; Worker `app` `96225660` with secret `POULTRIX_OWNER_EMAILS`. A LAN request with no tunnel user → 403 `OWNER_ONLY`.
+- **Restart: PASS.**
+  - Booted 10:30:58; Arduino reconnected on `ttyACM0` 10:31:28; LIVE, stage GROWER kept. The owner saw the banner back after about 40 s.
+  - The LCD went blank, on, blank, on: USB power cut during reboot, then the serial-open reset. Relays drop for those seconds.
+  - The audit line was lost (the journal wasn't persistent).
+- **Power off 5 min: FAIL, the Pi did not wake.**
+  - Everything went dark: **the Pi 5 cuts USB power when off**, so the Arduino, LCD and relays are unpowered.
+  - The owner had to replug it (boot 10:34:33).
+  - Something answered ping at .48 during the wait while SSH timed out; the cause is unknown because there were no persistent logs.
+  - The alarm had been set and read back (otherwise 500). EEPROM `POWER_OFF_ON_HALT=0`.
+- **Actions (owner-approved, deployed 10:46):**
+  - Timed power-off disabled in the UI (Power off = stays off) and on the Pi (`SYSTEM_POWER_WAKE_MINUTES = ()`, 400). Pi `app.py` `e87c67c6`, Worker `app` `11a4adb4`.
+  - Persistent journald (`/etc/systemd/journald.conf.d/persistent.conf`, 200 MB).
+  - Harness 23/23 (timed refused by default; timer path still covered).
+- **Next (owner present):** try EEPROM `POWER_OFF_ON_HALT=1` and a 2-minute timed power-off with someone at the power button; read the persistent logs. Re-enable timed power-off only after it passes.
+
 - [ ] Restart: the site shows "Restarting…" and comes back; same stage; `BOOT:AUTO`.
 - [ ] Power off 5 min: note whether the Arduino LCD and relays stay powered while the Pi is off. The Pi wakes about 5 min later and the site comes back.
 - [ ] (Optional) Stay off: power on with the Pi 5 button.

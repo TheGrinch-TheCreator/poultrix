@@ -22,6 +22,11 @@ Owner answers (2026-11-08):
   - It's not yet verified whether the Pi 5 keeps USB powered while halted. A supervised test answers it (Checkpoint P-A).
 - **Reboot:** the Arduino keeps its stage in EEPROM and restarts in automatic control (`BOOT:AUTO`) when the Pi's serial port reopens. The site is offline for about 1–2 min.
 
+### Checkpoint P-A findings (2026-11-08)
+- **USB power:** the Pi 5 cuts USB power when powered off: the Arduino, LCD, heater and fans are all off while the Pi is off.
+- **Wake timer:** the RTC wake did **not** power the Pi back on after 5 min (`POWER_OFF_ON_HALT=0`). **Timed power-off is disabled** (UI and Pi) until a fix passes a supervised test; "Power off" now always stays off.
+- **Restart:** works (back in about 40 s, stage kept).
+
 ## Design
 1. **Pi routes** (`app.py`), each needing a JSON body `{"confirm": "REBOOT"}` / `{"confirm": "POWEROFF", "minutes": N}`:
    - `POST /api/system/reboot`

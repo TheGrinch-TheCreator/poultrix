@@ -3475,7 +3475,9 @@ def inventory_initialize():
 # Arduino is USB-powered by the Pi, so climate control may stop while off.
 import subprocess as _subprocess
 
-SYSTEM_POWER_WAKE_MINUTES = (5, 15, 30)
+# Timed power-off is disabled: the Pi 5 did not wake from the RTC alarm in
+# Checkpoint P-A (2026-11-08). Only "stay off" until fixed and re-tested.
+SYSTEM_POWER_WAKE_MINUTES = ()
 SYSTEM_POWER_DELAY_SECONDS = 2.0
 RTC_WAKEALARM = "/sys/class/rtc/rtc0/wakealarm"
 system_power_lock = threading.Lock()
@@ -3562,7 +3564,7 @@ def _system_power(action):
         if stay_off and minutes is not None:
             return jsonify(error="Stay off takes no wake time"), 400
         if not stay_off and (type(minutes) is not int or minutes not in SYSTEM_POWER_WAKE_MINUTES):
-            return jsonify(error="Wake time must be 5, 15 or 30 minutes"), 400
+            return jsonify(error="Timed power-off is disabled; use stay off"), 400
     if _feeding_busy():
         return jsonify(error="Feed is being dispensed; try again when it finishes"), 409
     with system_power_lock:
