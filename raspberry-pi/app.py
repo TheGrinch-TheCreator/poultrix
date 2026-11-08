@@ -154,7 +154,7 @@ state_lock = threading.Lock()
 feeding_lock = threading.Lock()
 feeding_gates = {str(i): {"status": "UNKNOWN", "durationMs": 0, "estimatedGrams": None, "updatedAt": None} for i in range(1, 3)}
 feeding_events = deque(maxlen=100)
-feeding_rates = {1: 101.39, 2: 103.00}  # estimated g/s from user measurements; not a measured delivered weight
+feeding_rates = {1: 101.39, 2: 157.7}  # g/s; compartment 2 measured 2026-11-08 (see FEED_RATES)
 feeding_pending = None
 feeding_last_error = None
 
@@ -3024,7 +3024,10 @@ FEED_CONFIG_PATH = _Path(__file__).with_name("feeding_config.json")
 # Fixed stage-based daily allowance (g/bird/day), configurable prototype estimates.
 FEED_FIXED_DAILY_GRAMS = {"STARTER": 35.0, "GROWER": 90.0, "FINISHER": 135.0}
 FEED_SESSIONS = {"STARTER": 6, "GROWER": 4, "FINISHER": 4}
-FEED_RATES = {1: 101.39, 2: 103.00}  # grams/sec, preliminary all-five-gate measurements
+# grams/sec with all five gates open. Compartment 2 measured 2026-11-08 (Checkpoint F-B):
+# hopper drops of 250 g / 1.529 s and 233 g / 1.534 s, plus 250 g caught hole by hole
+# -> 157.7 g/s (was 103.00). Compartment 1 still the preliminary value.
+FEED_RATES = {1: 101.39, 2: 157.7}
 DEFAULT_FEED_CONFIG = {"birdCount": None, "batchStartDate": None, "times": [], "timezone": "Asia/Manila", "automaticEnabled": False}
 
 def _feed_plan(config, stage):

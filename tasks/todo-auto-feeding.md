@@ -177,7 +177,13 @@ A1 feeding_schedule.py + unit tests ─┬─ A2 trough calibration (Pi + mainte
   - console Hole 1–5 buttons;
   - offline 7/7.
   - Flashed 14:22 (hex `fdbe0dad`, backup `flash_before_hole_test_*`), Pi `app.py` `e4f20bdd`, Worker `maintenance` `d7e90606`.
-- **Next:** the owner weighs each hole at 1.53 s; Test 2 (500 g weight → skip, or feed if unreadable); Test 3 (maintenance open → skip); then restore times and decide on commissioning.
+- **Gate rate measured:**
+  - holes one at a time, 5 × 1.53 s caught = **250 g** (kitchen scale);
+  - all 5 together, hopper drop **250 g / 1.529 s** (13:47) and **233 g / 1.534 s** (14:40).
+  - So compartment 2 delivers about **157.7 g/s**, not 103.00: sessions were giving about 240 g instead of 157.5 g.
+  - **`FEED_RATES[2] = 157.7`** (owner-approved), deployed: Pi `app.py` `41649071`; frontend stale rate text removed (Worker `app` `ad066385`). A 157.5 g session is now a 0.999 s gate.
+  - Compartment 1 (101.39) is not re-measured yet.
+- **Next:** one confirmation dispense (hopper drop ≈ 158 g?); Test 2 (500 g weight → skip, or feed if unreadable); Test 3 (maintenance open → skip); then restore times and decide on commissioning.
 
 - [ ] Set the Pi commissioning flag temporarily, with a test session time a few minutes ahead. Empty trough → about the target is dispensed; weigh it on a kitchen scale.
 - [ ] Trough above the target → skipped with a reason.
