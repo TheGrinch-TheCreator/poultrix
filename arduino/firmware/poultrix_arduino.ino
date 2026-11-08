@@ -52,10 +52,22 @@ float lcdSimTempC = 0.0f, lcdSimHopperG = 0.0f;
 bool maintenanceActive = false;
 unsigned long maintenanceLastPing = 0;
 const unsigned long MAINTENANCE_TIMEOUT_MS = 10000UL;
+// Entering maintenance changes no output. Automatic control keeps running for
+// every output except the ones switched by hand (BYPASS:RELAY), which stay
+// manual until maintenance ends.
+bool manualFan[4] = {false, false, false, false};
+bool manualHeater = false;
+bool manualLed = false;
+void clearManualOverrides() {
+  for (uint8_t i = 0; i < 4; i++) manualFan[i] = false;
+  manualHeater = false;
+  manualLed = false;
+}
 void maintenanceOff() {
   // Leave manual bypass and hand the outputs straight back to automatic
   // control. Never switch everything off just because maintenance ended.
   maintenanceActive = false;
+  clearManualOverrides();
   lcdSimTemperature = false;
   lcdSimHopper = false;
   stopGroups();
@@ -517,6 +529,9 @@ void setup() {
   dht.begin();
 
   Wire.begin();
+  // A transfer corrupted by relay noise times out (25 ms) and resets the bus
+  // instead of hanging the whole controller.
+  Wire.setWireTimeout(25000, true);
   pwm.begin();
   pwm.setPWMFreq(50);
   lcd.init();
@@ -728,9 +743,10 @@ void readLiveSensors() {
 
     dhtReadingValid = false;
 
-    if (!maintenanceActive) {
-      setHeaters(false, false);
-      setFans(false, false, false, false);
+    applyAutoHeater(false, true);
+    {
+      const bool off[4] = {false, false, false, false};
+      applyAutoFans(off, true);
     }
 
     Serial.println("DHT22_STATUS:ERROR");
@@ -822,142 +838,80 @@ void updateStageTargets() {
 // AUTOMATIC TEMPERATURE CONTROL
 // ============================================================
 
+// Relay chatter guard: a reading that wobbles by 0.1 C around a threshold
+// must not flip a relay every 2 s. Each threshold has a dead band, and an
+// automatic change to one output waits at least AUTO_MIN_DWELL_MS after its
+// last automatic change (fault switch-offs are immediate).
+const float HEATER_HYSTERESIS_C = 0.3f;  // on below tempMin, off at tempMin + 0.3
+const float FAN_HYSTERESIS_C = 0.3f;     // fan k on above tempMax + (k-1), off at 0.3 below
+const unsigned long AUTO_MIN_DWELL_MS = 30000UL;
+unsigned long lastAutoFanChange[4] = {0, 0, 0, 0};
+unsigned long lastAutoHeaterChange = 0;
+unsigned long lastAutoLedChange = 0;
+
+bool autoDwellElapsed(unsigned long last) {
+  return last == 0 || millis() - last >= AUTO_MIN_DWELL_MS;
+}
+
+void applyAutoFans(const bool want[4], bool force) {
+  bool next[4] = {fan1State, fan2State, fan3State, fan4State};
+  bool changed = false;
+  for (uint8_t i = 0; i < 4; i++) {
+    if (manualFan[i] || next[i] == want[i]) continue;
+    if (!force && !autoDwellElapsed(lastAutoFanChange[i])) continue;
+    next[i] = want[i];
+    lastAutoFanChange[i] = millis();
+    changed = true;
+  }
+  if (changed) setFans(next[0], next[1], next[2], next[3]);
+}
+
+void applyAutoHeater(bool want, bool force) {
+  const bool current = heater1State || heater2State;
+  if (manualHeater || current == want) return;
+  if (!force && !autoDwellElapsed(lastAutoHeaterChange)) return;
+  setHeaters(want, want);
+  lastAutoHeaterChange = millis();
+}
+
+void applyAutoLed(bool want, bool force) {
+  if (manualLed || ledState == want) return;
+  if (!force && !autoDwellElapsed(lastAutoLedChange)) return;
+  setLED(want);
+  lastAutoLedChange = millis();
+  Serial.println(want ? F("AUTO_LED:ON_DARK") : F("AUTO_LED:OFF_BRIGHT"));
+}
+
 void controlTemperature() {
-  // Manual bypass owns relay outputs until explicitly exited or timed out.
-  if (maintenanceActive) return;
+  // Runs during maintenance too; outputs switched by hand are left alone.
 
   // Fault response (not a mode): without a valid DHT22 reading the
   // heater and fans are switched off until the next valid reading.
   if (!dhtReadingValid) {
-    setHeaters(false, false);
-    setFans(false, false, false, false);
+    const bool off[4] = {false, false, false, false};
+    applyAutoHeater(false, true);
+    applyAutoFans(off, true);
     return;
   }
 
+  // Heater: on below tempMin, off only once tempMin + hysteresis is reached.
+  bool heat = heater1State || heater2State;
+  if (manualHeater) heat = false;  // a hand-held heater does not drive the automatic decision
+  if (temperature < tempMin) heat = true;
+  else if (temperature >= tempMin + HEATER_HYSTERESIS_C) heat = false;
 
-
-  // ----------------------------------------------------------
-  // TOO COLD
-  // ----------------------------------------------------------
-
-  if (temperature < tempMin) {
-
-    setFans(
-      false,
-      false,
-      false,
-      false
-    );
-
-    setHeaters(
-      true,
-      true
-    );
+  // Fans: fan k (1-4) on above tempMax + (k-1) C, off at hysteresis below it.
+  bool fans[4] = {fan1State, fan2State, fan3State, fan4State};
+  for (uint8_t i = 0; i < 4; i++) {
+    const float threshold = tempMax + i;
+    if (temperature > threshold) fans[i] = true;
+    else if (temperature <= threshold - FAN_HYSTERESIS_C) fans[i] = false;
   }
+  // Never heat and ventilate at the same time.
+  if (heat) for (uint8_t i = 0; i < 4; i++) fans[i] = false;
 
-
-  // ----------------------------------------------------------
-  // NORMAL TEMPERATURE
-  // ----------------------------------------------------------
-
-  else if (temperature <= tempMax) {
-
-    setFans(
-      false,
-      false,
-      false,
-      false
-    );
-
-    setHeaters(
-      false,
-      false
-    );
-  }
-
-
-  // ----------------------------------------------------------
-  // UP TO 1 C ABOVE MAX
-  // FAN 1
-  // ----------------------------------------------------------
-
-  else if (temperature <= tempMax + 1.0) {
-
-    setHeaters(
-      false,
-      false
-    );
-
-    setFans(
-      true,
-      false,
-      false,
-      false
-    );
-  }
-
-
-  // ----------------------------------------------------------
-  // 1-2 C ABOVE MAX
-  // FANS 1 + 2
-  // ----------------------------------------------------------
-
-  else if (temperature <= tempMax + 2.0) {
-
-    setHeaters(
-      false,
-      false
-    );
-
-    setFans(
-      true,
-      true,
-      false,
-      false
-    );
-  }
-
-
-  // ----------------------------------------------------------
-  // 2-3 C ABOVE MAX
-  // FANS 1 + 2 + 3
-  // ----------------------------------------------------------
-
-  else if (temperature <= tempMax + 3.0) {
-
-    setHeaters(
-      false,
-      false
-    );
-
-    setFans(
-      true,
-      true,
-      true,
-      false
-    );
-  }
-
-
-  // ----------------------------------------------------------
-  // MORE THAN 3 C ABOVE MAX
-  // ALL 4 FANS
-  // ----------------------------------------------------------
-
-  else {
-
-    setHeaters(
-      false,
-      false
-    );
-
-    setFans(
-      true,
-      true,
-      true,
-      true
-    );
-  }
+  applyAutoHeater(heat, false);
+  applyAutoFans(fans, false);
 }
 
 
@@ -967,26 +921,18 @@ void controlTemperature() {
 // Below 50 lux -> ON; above 50 lux -> OFF; at 50 -> unchanged.
 // IMPORTANT: Shield the LDR from the LED to avoid feedback flicker.
 // ============================================================
-const float LIGHT_THRESHOLD_LUX = 50.0f;
+const float LIGHT_ON_BELOW_LUX = 50.0f;   // LED on below 50 lux
+const float LIGHT_OFF_ABOVE_LUX = 65.0f;  // LED off only above 65 lux (dead band)
 
 void controlLiveLighting() {
-  if (maintenanceActive) return;
+  // Runs during maintenance too; a hand-switched LED is left alone.
   // Heater lamps provide light: keep the separate LED off while heating.
   if (heater1State || heater2State) {
-    if (ledState) setLED(false);
+    applyAutoLed(false, true);
     return;
   }
-  if (liveLux < LIGHT_THRESHOLD_LUX) {
-    if (!ledState) {
-      setLED(true);
-      Serial.println(F("AUTO_LED:ON_DARK"));
-    }
-  } else if (liveLux > LIGHT_THRESHOLD_LUX) {
-    if (ledState) {
-      setLED(false);
-      Serial.println(F("AUTO_LED:OFF_BRIGHT"));
-    }
-  }
+  if (liveLux < LIGHT_ON_BELOW_LUX) applyAutoLed(true, false);
+  else if (liveLux > LIGHT_OFF_ABOVE_LUX) applyAutoLed(false, false);
 }
 
 
@@ -1123,12 +1069,10 @@ void handleSerialCommands() {
     return;
   }
   if (command == "BYPASS:ON") {
-    // Preserve current low-voltage fan/LED states when entering bypass.
-    // Suspend automatic control and keep the mains heater OFF on entry.
-    // Leaving bypass (BYPASS:OFF or ping timeout) returns to automatic control.
-    setHeaters(false,false);
-    for (uint8_t i=0;i<GATE_COUNT;i++) closeGate(i,"STOPPED");
-    stopGroups();
+    // Entering maintenance changes nothing: relays, gates and automatic
+    // control stay exactly as they were. Outputs become manual only when
+    // switched by hand. Leaving (BYPASS:OFF or ping timeout) clears that.
+    if (!maintenanceActive) clearManualOverrides();
     maintenanceActive = true;
     maintenanceLastPing = millis();
     Serial.println(F("BYPASS_ACK:ON"));
@@ -1160,6 +1104,9 @@ void handleSerialCommands() {
       Serial.println(F("BYPASS_ERROR:BAD_RELAY")); return;
     }
     int n = channel - '0';
+    if (n >= 1 && n <= 4) manualFan[n - 1] = true;
+    if (n == 5) manualLed = true;
+    if (n == 6) manualHeater = true;
     if (n == 1) setFans(value == '1',fan2State,fan3State,fan4State);
     if (n == 2) setFans(fan1State,value == '1',fan3State,fan4State);
     if (n == 3) setFans(fan1State,fan2State,value == '1',fan4State);

@@ -211,7 +211,7 @@ export function Console() {
 
             <Card>
               <CardTitle>Relay control</CardTitle>
-              <p className="my-2 text-xs text-muted-foreground">Fans, LED and the heater relay (D28 / IN7, both lamps together) need the Arduino's acknowledgement. Outputs return to automatic control when bypass ends or the 10 s safety timeout expires.</p>
+              <p className="my-2 text-xs text-muted-foreground">Entering maintenance changes nothing: everything keeps running automatically. An output you switch here (fans, LED, heater relay D28 / IN7) stays manual until you exit, use Return to automatic, or the 10 s safety timeout expires. Each switch needs the Arduino's acknowledgement.</p>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                 {RELAY_NAMES.map((name, i) => (
                   <button key={name} className={btn} disabled={busy || !relayReady || !active} onClick={() => void toggleRelay(i + 1)}>{name}: {relayState[i + 1] ? "ON" : "OFF"}</button>
@@ -221,7 +221,7 @@ export function Console() {
 
             <Card>
               <CardTitle>Sensor test readings</CardTitle>
-              <p className="my-2 text-xs text-muted-foreground">Temperature test values drive the fan relays; LDR raw values drive the LED relay. Values fluctuate every 2 s around what you enter. Hopper/trough values show as SIMULATED in the app. Simulations never turn on the heater.</p>
+              <p className="my-2 text-xs text-muted-foreground">Temperature test values drive the fan relays; LDR raw values drive the LED relay. Values fluctuate every 2 s around what you enter. Test values show only on this site (temperature and hopper also on the LCD); the main app keeps showing real readings. Simulations never turn on the heater.</p>
               <div className="grid gap-3 sm:grid-cols-2">
                 {SENSOR_KEYS.map(([key, label]) => (
                   <label key={key} className="text-sm">{label}

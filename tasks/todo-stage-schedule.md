@@ -138,6 +138,32 @@ S1 stage_schedule.py + unit tests ── S2 app.py wiring ── Pi deploy ─�
   - tsc 13 errors (15 before, none new); builds OK;
   - on the Pi, main view has no `maintenanceActive` / `simulation`, and confirm-stage without a token → 403.
 
+## F1: Firmware fix (owner request 2026-11-08): invisible maintenance entry, no relay chatter
+**Why:**
+- The maintenance login failed with "Arduino did not confirm maintenance mode". All 3 freezes today followed `BYPASS:ON`: the handler switched the mains heater relay off and immediately sent servo commands over I2C, and the Arduino went silent until the Pi reset it.
+- There was no I2C timeout.
+- The heater, fans and LED switched at a single threshold, so a reading wobbling by 0.1 °C flipped a relay every 2–4 s.
+
+**Change** (`arduino/firmware/poultrix_arduino.ino`):
+- `BYPASS:ON` changes **no** output (no heater off, no gate close, no group stop).
+- Automatic temperature and lighting control keep running during maintenance for every output not switched by hand. `BYPASS:RELAY` marks that output manual until `BYPASS:OFF` or the 10 s timeout.
+- Heater: on below `tempMin`, off at `tempMin + 0.3 °C`.
+- Fan k: on above `tempMax + (k-1)`, off 0.3 °C below it.
+- LED: on below 50 lux, off above 65 lux.
+- Each automatic relay change waits ≥ 30 s after that relay's last automatic change; fault switch-offs (DHT22 error, heater-lamp light) are immediate.
+- `Wire.setWireTimeout(25000, true)`: a noisy I2C transfer times out instead of freezing the controller.
+
+**Flashed 2026-11-08 09:22** from the Pi (avrdude, verified):
+- hex sha `764f74c2`;
+- previous flash backed up to `~/arduino_backups/flash_before_hysteresis_20261108_092156.hex`;
+- compiles for Mega 2560 with no sketch warnings (26,710 B flash / 1,495 B RAM).
+
+**Checks:**
+- Login on the Pi with the heater off: `BYPASS_ACK:ON` at once, relays unchanged during and after; exit OK.
+- Heater-on login test and 10-minute relay-change count: running.
+
+**Console text:** updated to match (entering changes nothing; test values only on the maintenance site). Deployed: Worker `maintenance` `4080c248`.
+
 ## S4: Docs
 **Description:**
 - **AGENTS.md and CLAUDE.md:** the new stage rule, AI cycle timing, `stage_schedule.py`, the Pi deploy now copies two files.
