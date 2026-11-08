@@ -195,12 +195,15 @@ A1 feeding_schedule.py + unit tests ─┬─ A2 trough calibration (Pi + mainte
   - Pi: removed the maintenance blocks in `_feed_inputs`, `_feed_job_run` and `run_feeding_session`; Exit / Return to automatic don't send `FEED:STOP` while a feed job runs.
   - A3 harness updated ("maintenance open → still feeds"); all harnesses pass.
   - **Deploy:** the first flash attempt (15:12) **failed**: the USB hub disabled the port ("EMI?") during the backup read, avrdude hung, nothing was written, and the service was down 15:12–15:18 (Arduino on its own; the 15:14 session skipped `controller_not_ready`). Retry 15:19 (write only, timeout, rollback hex ready): **flash+verify OK** (hex `81a0306b`); Pi `app.py` `56d67d9f`; LIVE.
-- **Next:** Test 3 (feed during maintenance); restore the normal times; owner decides on commissioning; Test 2 (500 g weight → skip, or feed if unreadable); Test 3 (maintenance open → skip); then restore times and decide on commissioning.
+- **Test 3 (15:22): PASS.** Maintenance unlocked 15:22:13; manual feed (the owner chose compartment 1, 200 g, 1.973 s) **completed** while maintenance was active (6 keep-alive pings around it). Hopper drop only 9 g → compartment 1 empty, or the hopper scale doesn't weigh compartment 1 (open question; compartment 1 rate still unmeasured).
+- **Checkpoint F-B: PASSED (2026-11-08).** The owner chose to **keep the Pi commissioned** and leave automatic feeding **on**. Normal times restored at 15:27 (`times: []` → stage defaults 06/10/14/18; `automaticEnabledAt` reset so 14:00 isn't logged as missed). Next session 18:00 (the trough held about 940 g → likely skip).
+- **Open:** measure compartment 1 (rate + offset) before the next Starter batch; the USB/EMI resets (ferrite / cable routing); a clean confirmation dispense with compartment 2 full (optional).
+- (superseded) Test 2 (500 g weight → skip, or feed if unreadable); Test 3 (maintenance open → skip); then restore times and decide on commissioning.
 
-- [ ] Set the Pi commissioning flag temporarily, with a test session time a few minutes ahead. Empty trough → about the target is dispensed; weigh it on a kitchen scale.
-- [ ] Trough above the target → skipped with a reason.
-- [ ] Maintenance open at the session time → skipped.
-- [ ] Then the owner decides whether to leave the flag and the toggle on.
+- [x] Set the Pi commissioning flag temporarily, with a test session time a few minutes ahead. Empty trough → the target is dispensed (13:47); amount checked via hopper drops / hole-by-hole catch → gate model.
+- [x] Trough above the target → skipped with a reason (15:08).
+- [x] ~~Maintenance open → skipped~~ changed by the owner: maintenance open → **still feeds** (15:22).
+- [x] Then the owner decides whether to leave the flag and the toggle on → **kept on**.
 
 ## A5: Docs
 CLAUDE.md, AGENTS.md (if rules change), vault (FEEDING_SYSTEM, API_REFERENCE, AD-28, CURRENT_STATUS, CHANGELOG, TEST_RESULTS), CAPABILITY_MAP · **Scope:** S
