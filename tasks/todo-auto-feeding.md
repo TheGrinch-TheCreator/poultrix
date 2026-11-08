@@ -225,3 +225,7 @@ CLAUDE.md, AGENTS.md (if rules change), vault (FEEDING_SYSTEM, API_REFERENCE, AD
 - **Deployed:** Pi `app.py` `c9710f8e` (all three modules), Worker `app` `0ed484d4`. Live: selected 2 (compartment 1 still Booster 3000 g placeholder).
 - **Next:** the owner fills compartment 1 with Integra 2 (feed-type change on the Feeding page), then 2–3 manual dispenses for its gate model → set `FEED_OFFSETS/RATES[1]` and `FEED_GATE_MEASURED[1] = True`.
 
+## Follow-up 2026-11-08 evening: first scheduled feed, LED hold
+- **18:00 automatic session:** trough 75.9 g (valid) → dispensed 157.5 g (gate 0.849 s, COMPLETED), fault streak 0. The hopper drop was only about 92 g (noisy hopper ±30 g; drifting before the feed); single point, recheck with the next sessions and refit the model's short-gate behavior if it stays low.
+- **LED:** the LDR saw the LED itself (about 86 lux) → LED off/on every 30 s after dark. Firmware: once on, the LED stays on until > 250 lux for 5 min (`LIGHT_DAYLIGHT_LUX`, `LIGHT_DAYLIGHT_CONFIRM_MS`); on below 50 lux unchanged; still off while heating. Flashed 18:08 (hex `2288e72b`, rollback `cedda118` on hand). Verified 18:09–18:12: on at 18:09:14 and stayed on (84 status reports), reading 68–75 lux.
+

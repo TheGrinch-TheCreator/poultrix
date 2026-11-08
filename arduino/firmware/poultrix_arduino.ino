@@ -973,18 +973,37 @@ void controlTemperature() {
 // Below 50 lux -> ON; above 50 lux -> OFF; at 50 -> unchanged.
 // IMPORTANT: Shield the LDR from the LED to avoid feedback flicker.
 // ============================================================
-const float LIGHT_ON_BELOW_LUX = 50.0f;   // LED on below 50 lux
-const float LIGHT_OFF_ABOVE_LUX = 65.0f;  // LED off only above 65 lux (dead band)
+const float LIGHT_ON_BELOW_LUX = 50.0f;   // LED off -> on below 50 lux
+// The LDR also sees the LED's own light (about 86 lux on 2026-11-08), so a
+// lit LED switched itself off every 30 s. Once on, it now stays on until the
+// sensor reads clear daylight (> 250 lux) continuously for 5 minutes.
+const float LIGHT_DAYLIGHT_LUX = 250.0f;
+const unsigned long LIGHT_DAYLIGHT_CONFIRM_MS = 300000UL;
+unsigned long daylightSince = 0;
 
 void controlLiveLighting() {
   // Runs during maintenance too; a hand-switched LED is left alone.
   // Heater lamps provide light: keep the separate LED off while heating.
   if (heater1State || heater2State) {
+    daylightSince = 0;
     applyAutoLed(false, true);
     return;
   }
-  if (liveLux < LIGHT_ON_BELOW_LUX) applyAutoLed(true, false);
-  else if (liveLux > LIGHT_OFF_ABOVE_LUX) applyAutoLed(false, false);
+  if (!ledState) {
+    daylightSince = 0;
+    if (liveLux < LIGHT_ON_BELOW_LUX) applyAutoLed(true, false);
+    return;
+  }
+  // LED on: switch off only after sustained daylight.
+  if (liveLux > LIGHT_DAYLIGHT_LUX) {
+    if (daylightSince == 0) daylightSince = millis();
+    if (millis() - daylightSince >= LIGHT_DAYLIGHT_CONFIRM_MS) {
+      applyAutoLed(false, false);
+      daylightSince = 0;
+    }
+  } else {
+    daylightSince = 0;
+  }
 }
 
 
