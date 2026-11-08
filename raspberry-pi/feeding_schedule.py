@@ -28,7 +28,10 @@ except ZoneInfoNotFoundError:  # e.g. Windows without tzdata; Manila is UTC+8, n
 TROUGH_WINDOW_SECONDS = 10.0
 TROUGH_MIN_SAMPLES = 5
 TROUGH_MAX_AGE_SECONDS = 5.0
-TROUGH_MAX_SPREAD_GRAMS = 25.0
+# The HX711 is read once per 2 s without averaging: single readings scatter
+# about +-14 g (measured 2026-11-08), so stability is judged by the standard
+# deviation, and the value is the median.
+TROUGH_MAX_STDEV_GRAMS = 25.0
 TROUGH_NEGATIVE_LIMIT_GRAMS = -25.0
 MIN_DISPENSE_GRAMS = 20.0
 MAX_DISPENSE_SECONDS = 10.0
@@ -44,7 +47,8 @@ def _number(value):
 
 def trough_valid(samples, now, commissioned=True):
     """samples: [(monotonic_time, grams)]. Valid only if >= 5 numeric samples
-    in the last 10 s, the newest < 5 s old, spread <= 25 g and median >= -25 g.
+    in the last 10 s, the newest < 5 s old, standard deviation <= 25 g and
+    median >= -25 g.
     Returns {valid, grams, reason}."""
     if not commissioned:
         return {"valid": False, "grams": None, "reason": "not_commissioned"}
@@ -54,7 +58,7 @@ def trough_valid(samples, now, commissioned=True):
     if now - max(t for t, _ in recent) >= TROUGH_MAX_AGE_SECONDS:
         return {"valid": False, "grams": None, "reason": "stale"}
     values = [g for _, g in recent]
-    if max(values) - min(values) > TROUGH_MAX_SPREAD_GRAMS:
+    if statistics.pstdev(values) > TROUGH_MAX_STDEV_GRAMS:
         return {"valid": False, "grams": None, "reason": "unstable"}
     median = statistics.median(values)
     if median < TROUGH_NEGATIVE_LIMIT_GRAMS:

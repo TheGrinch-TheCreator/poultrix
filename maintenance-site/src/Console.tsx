@@ -105,13 +105,17 @@ export function Console() {
     } finally { setBusy(false); }
   }
 
+  const [countdown, setCountdown] = useState(0);
   async function troughStep(step: "trough-zero" | "trough-check") {
     const prompt = step === "trough-zero"
       ? "Zero the trough?\n\nThe trough must be EMPTY and still. This takes about 20 seconds."
       : "Check with the 500 g weight?\n\nPut the 500 g weight in the otherwise empty trough and keep it still. This takes about 20 seconds.";
     if (!window.confirm(prompt)) return;
     setBusy(true);
-    setMessage(step === "trough-zero" ? "Zeroing the trough… keep it still (about 20 s)." : "Checking 500 g… keep it still (about 20 s).");
+    setMessage(step === "trough-zero" ? "Zeroing the trough… keep it still." : "Checking 500 g… keep it still.");
+    // Ten readings arrive every 2 s: show a countdown while the Pi measures.
+    setCountdown(20);
+    const timer = setInterval(() => setCountdown((value) => Math.max(0, value - 1)), 1000);
     try {
       const result = await call<{ zeroRaw?: number; countsPerGram?: number; spreadCounts?: number }>(step, step === "trough-check" ? { grams: 500 } : {});
       setMessage(step === "trough-zero"
@@ -120,7 +124,7 @@ export function Console() {
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
       if (sessionExpired(error)) clearSession();
-    } finally { setBusy(false); }
+    } finally { clearInterval(timer); setCountdown(0); setBusy(false); }
   }
 
   async function toggleRelay(index: number) {
@@ -327,7 +331,7 @@ export function Console() {
               <CardTitle>Trough scale</CardTitle>
               {(() => {
                 const trough = status?.trough;
-                const reasons: Record<string, string> = { too_few_samples: "not enough readings", stale: "readings stopped", unstable: "unstable (moving more than 25 g)", negative: "below zero (zero it again)", not_commissioned: "not calibrated yet" };
+                const reasons: Record<string, string> = { too_few_samples: "not enough readings", stale: "readings stopped", unstable: "unstable (noise more than ±25 g)", negative: "below zero (zero it again)", not_commissioned: "not calibrated yet" };
                 return (
                   <>
                     <p className="my-2 text-sm">
@@ -347,6 +351,11 @@ export function Console() {
                       <button className={btn} disabled={busy} onClick={() => void troughStep("trough-zero")}>Zero trough</button>
                       <button className={btn} disabled={busy || !trough?.zeroRaw} onClick={() => void troughStep("trough-check")}>Check 500 g</button>
                     </div>
+                    {countdown > 0 && (
+                      <p role="status" className="mt-3 text-sm font-semibold">
+                        Measuring… keep the trough still: <span className="tabular-nums">{countdown}</span> s
+                      </p>
+                    )}
                   </>
                 );
               })()}

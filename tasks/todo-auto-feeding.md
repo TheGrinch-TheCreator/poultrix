@@ -72,6 +72,13 @@ A1 feeding_schedule.py + unit tests ─┬─ A2 trough calibration (Pi + mainte
 **Files:** `raspberry-pi/app.py`, `src/lib/server/pi-gateway.ts`, `tests/pi-gateway/*`, `maintenance-site/src/Console.tsx` · **Scope:** M · **Depends on:** A1 (validity helper)
 
 ### Checkpoint F-A (owner at the farm)
+**First attempt (2026-11-08 11:48–11:49): Zero trough refused "unstable" every time.**
+- Measured over 90 s with the trough still: single readings scatter ±14 g (stdev), and the max−min of any 10 readings is about 57 g. The medians of 10 readings stayed within about 13 g.
+- **Fix:** stability is now judged by the **standard deviation ≤ 25 g** (Pi zero/check and `feeding_schedule.trough_valid`), and the value is the median.
+- The console shows a 20 s countdown while measuring.
+- 22 unit tests; A2 harness 17/17.
+- Deployed: Pi `app.py` `71273028`, `feeding_schedule.py` `63656362`; Worker `maintenance` `00130af3`.
+
 - [ ] Empty the trough, then **Zero trough** → accepted.
 - [ ] 500 g in the trough, then **Check 500 g** → accepted, and the reading shows 500 ± 25 g.
 - [ ] Empty trough again: the reading stays within ±25 g of 0 for 5 min.

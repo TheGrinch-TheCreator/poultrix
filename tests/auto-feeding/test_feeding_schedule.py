@@ -44,8 +44,14 @@ class TroughValid(unittest.TestCase):
         self.assertFalse(r["valid"])
         self.assertEqual(r["reason"], "negative")
 
+    def test_sensor_noise_is_valid(self):
+        # Real trough noise on 2026-11-08 (empty trough, grams vs the median).
+        r = fs.trough_valid(samples([-29, 8, 18, -28, 13]), 100.0)
+        self.assertTrue(r["valid"], r)
+        self.assertEqual(r["grams"], 8)
+
     def test_noisy_invalid(self):
-        r = fs.trough_valid(samples([40, 90, 41, 43, 40]), 100.0)
+        r = fs.trough_valid(samples([40, 120, 41, 43, -30]), 100.0)
         self.assertFalse(r["valid"])
         self.assertEqual(r["reason"], "unstable")
 

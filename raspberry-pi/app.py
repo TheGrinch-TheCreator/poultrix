@@ -232,7 +232,9 @@ schedule_attempt = stage_schedule.load_attempt(STAGE_SCHEDULE_PATH)
 TROUGH_CAL_PATH = Path(__file__).with_name("trough_calibration.json")
 TROUGH_REFERENCE_COUNTS_PER_GRAM = 83.97  # previous two-point measurement
 TROUGH_CAL_SAMPLES = 10
-TROUGH_CAL_MAX_SPREAD_COUNTS = 2000       # about 24 g
+# Noise limit: standard deviation of the 10 readings, about 25 g (single
+# HX711 readings scatter about +-14 g; the median is what gets stored).
+TROUGH_CAL_MAX_STDEV_COUNTS = 2100
 TROUGH_CHECK_TOLERANCE = 0.10
 trough_raw_samples = deque(maxlen=40)     # (monotonic, raw)
 trough_cal_lock = threading.Lock()
@@ -2190,7 +2192,7 @@ def _trough_status():
 
 
 def _stable_trough_raw():
-    """(median raw, spread) from TROUGH_CAL_SAMPLES fresh readings, or an error response."""
+    """(median raw, noise) from TROUGH_CAL_SAMPLES fresh readings, or an error response."""
     with state_lock:
         online = arduino_online_locked()
     if not online:
@@ -2198,13 +2200,14 @@ def _stable_trough_raw():
     raws = _collect_trough_raw(TROUGH_CAL_SAMPLES, TROUGH_CAL_SAMPLES * 2 + 10)
     if len(raws) < TROUGH_CAL_SAMPLES:
         return None, (jsonify(error=f"Only {len(raws)} trough readings arrived; try again"), 503)
-    spread = max(raws) - min(raws)
-    if spread > TROUGH_CAL_MAX_SPREAD_COUNTS:
+    import statistics
+    spread = int(statistics.pstdev(raws))
+    if spread > TROUGH_CAL_MAX_STDEV_COUNTS:
         grams = spread / TROUGH_REFERENCE_COUNTS_PER_GRAM
-        return None, (jsonify(error=f"Trough reading unstable: it moved {spread} counts (about {grams:.0f} g) "
-                                    "during the measurement. Keep the trough still and try again.",
+        return None, (jsonify(error=f"Trough reading unstable: noise about ±{grams:.0f} g during the measurement "
+                                    "(limit ±25 g). Keep the trough still and try again.",
                               spreadCounts=spread, spreadGrams=round(grams, 1)), 409)
-    return (int(sorted(raws)[len(raws) // 2]), spread), None
+    return (int(statistics.median(raws)), spread), None
 
 
 @app.route("/api/bypass/trough-zero", methods=["POST"])
