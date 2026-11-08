@@ -32,10 +32,18 @@ function LiveCompartmentManager(){
   {[1,2].map(id=>{const c=data?.compartments.find(x=>x.id===id);const green=id===1;return <div key={id} className="rounded-2xl border p-5 space-y-4" style={{borderColor:green?"#8acb32":"#f59a30",background:green?"rgba(138,203,50,.07)":"rgba(245,154,48,.07)"}}>
    <div className="flex items-center gap-3"><span className="h-5 w-5 rounded-md" style={{background:green?"#8acb32":"#f59a30"}}/><h3 className="font-bold">Compartment {id}</h3></div>
    <label className="block text-sm font-medium">Feed type</label>
-   <select aria-label={`Compartment ${id} feed`} className="w-full rounded-lg border bg-background p-2" disabled={busy||!data} value={c?.feedId||""} onChange={e=>void post("assign",{compartment:id,feedId:e.target.value})}>{data?.feeds.map(f=><option key={f.id} value={f.id}>{f.name} — {f.stages.join("/")}</option>)}</select>
+   <select aria-label={`Compartment ${id} feed`} className="w-full rounded-lg border bg-background p-2" disabled={busy||!data} value={c?.feedId||""} onChange={e=>{const feedId=e.target.value;const feedName=data?.feeds.find(f=>f.id===feedId)?.name??feedId;
+      if(c&&c.feedId!==feedId&&c.estimatedGrams){
+       // Owner, 2026-11-08: switching feed type means the compartment was emptied and refilled.
+       const answer=window.prompt(`Compartment ${id} still has ${(c.estimatedGrams/1000).toFixed(2)} kg of ${c.feed?.name??c.feedId} recorded.\n\nIf you emptied it and filled it with ${feedName}, enter how many kg of ${feedName} are in it now:`);
+       if(answer===null)return;const kgNow=Number(answer);
+       if(!Number.isFinite(kgNow)||kgNow<0||kgNow>100){setError("Enter the kilograms now in the compartment (0-100).");return}
+       void post("assign",{compartment:id,feedId,emptied:true,kilograms:kgNow});return}
+      void post("assign",{compartment:id,feedId})}}>{data?.feeds.map(f=><option key={f.id} value={f.id}>{f.name} — {f.stages.join("/")}</option>)}</select>
    <p className="text-sm">{kg(c?.estimatedGrams??null)}</p>
    <p className="text-xs text-muted-foreground">Estimated from refill records, not individually measured by a load cell.</p>
-   <p className={`text-sm font-medium ${c?.stageCompatible?"text-green-700":"text-orange-700"}`}>{c?.stageCompatible?"Compatible with confirmed stage":"Not compatible with confirmed stage"}</p>
+   <p className={`text-sm font-medium ${c?.stageCompatible?"text-green-700":"text-orange-700"}`}>{c?.stageCompatible?"Compatible with confirmed stage":"Not compatible with confirmed stage"}{data?.selectedCompartment===id?" · used for the next feeding":""}</p>
+   {c&&!(c as Compartment&{gateMeasured?:boolean}).gateMeasured&&<p className="text-xs text-muted-foreground">Gate output not measured yet: automatic feeding uses this compartment only when the other one isn't suitable.</p>}
    {c?.lowFeed&&<p className="text-sm font-semibold text-red-600">Low estimated feed — refill soon</p>}
    <div className="flex gap-2"><input aria-label={`Refill compartment ${id} kilograms`} type="number" min="0.01" max="100" step="0.01" placeholder="Refill kg" className="min-w-0 flex-1 rounded-lg border bg-background p-2" value={refills[id]} onChange={e=>setRefills(p=>({...p,[id]:e.target.value}))}/><button className="rounded-lg bg-primary px-3 py-2 text-primary-foreground disabled:opacity-50" disabled={busy||!data||!(Number(refills[id])>0)} onClick={()=>{if(window.confirm(`Confirm adding ${refills[id]} kg to compartment ${id}?`))void post("refill",{compartment:id,kilograms:Number(refills[id])}).then(()=>setRefills(p=>({...p,[id]:""})));}}>Record refill</button></div>
    <p className="text-xs text-muted-foreground">Five servos • PCA9685 {id===1?"CH 0–4":"CH 11–15"} • closed 0°, open 90°</p>

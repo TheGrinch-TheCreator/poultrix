@@ -116,8 +116,9 @@ function Dashboard() {
               <div className="mt-4 text-xs uppercase tracking-wider text-muted-foreground">Assigned feed compartment</div>
               <div className="mt-2 flex items-center gap-2">
                 {assignedCompartment === 1 || assignedCompartment === 2 ? <>
-                  <span className={`inline-block h-3 w-3 rounded-full ${assignedCompartment === 1 ? "bg-orange-500" : "bg-green-500"}`} aria-hidden="true" />
-                  <span className={`font-semibold ${assignedCompartment === 1 ? "text-orange-600 dark:text-orange-400" : "text-green-600 dark:text-green-400"}`}>Compartment {assignedCompartment}</span>
+                  {/* Same colors as the Feeding page: compartment 1 green, compartment 2 orange. */}
+                  <span className="inline-block h-3 w-3 rounded-full" style={{ background: assignedCompartment === 1 ? "#8acb32" : "#f59a30" }} aria-hidden="true" />
+                  <span className="font-semibold" style={{ color: assignedCompartment === 1 ? "#5f9a1c" : "#d97a12" }}>Compartment {assignedCompartment}</span>
                 </> : <span className="text-sm text-muted-foreground">Not assigned</span>}
               </div>
               {planError && <p className="mt-2 text-xs text-destructive">Feeding plan unavailable: {planError}</p>}

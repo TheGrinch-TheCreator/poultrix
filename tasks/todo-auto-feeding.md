@@ -217,3 +217,11 @@ CLAUDE.md, AGENTS.md (if rules change), vault (FEEDING_SYSTEM, API_REFERENCE, AD
 - **Cause 2 (open):** the rest is random (no link to relays): likely hopper HX711 wiring/contacts (D3/D2, 5V, GND) or cable routing. The owner is to check it.
 - **Pi smoothing:** a missed report keeps the last good value up to 6 s (`WEIGHT_HOLD_SECONDS`, `missedReadings`); after 6 s without a good reading NOT_READY shows. Harness 7/7. **Deployed 2026-11-08** (Pi `app.py` `9dcbc9d1`, all three modules): over 20 s the hopper always showed a weight (781–836 g); 3 missed reports were held (`missedReadings: 1`).
 
+## Follow-up 2026-11-08: compartment colors, feed-type change, automatic choice
+- **Dashboard:** the Next scheduled feeding indicator uses the Feeding page colors (compartment 1 green `#8acb32`, compartment 2 orange `#f59a30`); they had been swapped.
+- **Feed-type change:** `POST /api/feeding/inventory/assign` accepts `{emptied: true, kilograms}` to change a compartment's feed after emptying and refilling (stock set, refill logged, `[AUDIT]`). Without it → 409 `NOT_EMPTY`. The Feeding page asks for the kg now in the compartment; the card shows "used for the next feeding".
+- **Automatic choice:** among suitable compartments, measured gates first (`FEED_GATE_MEASURED = {1: False, 2: True}`), then more stock; an unmeasured gate is used only when no measured one is suitable.
+- **Tests:** harness 8/8; earlier harnesses pass.
+- **Deployed:** Pi `app.py` `c9710f8e` (all three modules), Worker `app` `0ed484d4`. Live: selected 2 (compartment 1 still Booster 3000 g placeholder).
+- **Next:** the owner fills compartment 1 with Integra 2 (feed-type change on the Feeding page), then 2–3 manual dispenses for its gate model → set `FEED_OFFSETS/RATES[1]` and `FEED_GATE_MEASURED[1] = True`.
+

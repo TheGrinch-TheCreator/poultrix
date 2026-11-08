@@ -3120,6 +3120,9 @@ FEED_SESSIONS = {"STARTER": 6, "GROWER": 4, "FINISHER": 4}
 # (residuals within +-9 g). Compartment 1 is still the preliminary 101.39 g/s.
 FEED_RATES = feeding_rates
 FEED_OFFSETS = feeding_offsets
+# Gates whose output was measured (hopper drops). Unmeasured gates are only
+# chosen when no measured compartment is suitable.
+FEED_GATE_MEASURED = {1: False, 2: True}
 DEFAULT_FEED_CONFIG = {"birdCount": None, "batchStartDate": None, "times": [], "timezone": "Asia/Manila", "automaticEnabled": False}
 
 def _feed_plan(config, stage):
@@ -3885,8 +3888,12 @@ def _inventory_snapshot(data):
     estimates = [c.get("estimatedGrams") for c in entries]
     estimated_total = sum(estimates) if all(x is not None for x in estimates) else None
     eligible = [c["id"] for c in entries if c["stageCompatible"] and (c["estimatedGrams"] is None or c["estimatedGrams"] > c["lowThresholdGrams"])]
-    # Prefer higher estimated stock when both are eligible; never issue a servo command here.
-    eligible.sort(key=lambda cid: (entries[cid-1]["estimatedGrams"] is not None, entries[cid-1]["estimatedGrams"] or 0), reverse=True)
+    # When both are suitable: prefer a compartment whose gate was measured
+    # (FEED_GATE_MEASURED), then the one with more estimated stock. An unmeasured
+    # gate is still used when it's the only suitable one. Never a servo command here.
+    for item in entries:
+        item["gateMeasured"] = bool(FEED_GATE_MEASURED.get(item["id"]))
+    eligible.sort(key=lambda cid: (bool(FEED_GATE_MEASURED.get(cid)), entries[cid-1]["estimatedGrams"] is not None, entries[cid-1]["estimatedGrams"] or 0), reverse=True)
     return {"feeds": data["feeds"], "compartments": entries, "refills": data["refills"][-30:][::-1],
             "confirmedStage": stage, "eligibleCompartments": eligible, "selectedCompartment": eligible[0] if eligible else None,
             "combinedActualGrams": measured, "combinedWeightStatus": weight.get("status"),
@@ -3920,13 +3927,26 @@ def inventory_assign():
     body=request.get_json(silent=True) or {}
     cid=body.get("compartment");fid=body.get("feedId")
     if type(cid)!=int or cid not in (1,2) or not isinstance(fid,str): return jsonify(error="Invalid compartment or feed"),400
+    # Owner, 2026-11-08: a compartment can change feed type after it was emptied
+    # and refilled; {"emptied": true, "kilograms": <now in it>} records that.
+    emptied=body.get("emptied") is True; kg=body.get("kilograms")
+    if emptied and (type(kg) not in (int,float) or isinstance(kg,bool) or not _inventory_math.isfinite(kg) or not 0<=kg<=100):
+        return jsonify(error="Enter the kilograms now in the compartment (0-100)"),400
     with inventory_lock:
         data=_inventory_read()
         if not any(f["id"]==fid for f in data["feeds"]):return jsonify(error="Unknown feed"),400
         comp=data["compartments"][cid-1]
-        if comp["feedId"]!=fid and comp.get("estimatedGrams") not in (None,0):
-            return jsonify(error="Clear or consume existing inventory before changing feed type"),409
-        comp["feedId"]=fid;_inventory_write(data)
+        if comp["feedId"]!=fid and comp.get("estimatedGrams") not in (None,0) and not emptied:
+            return jsonify(error="Compartment still has feed recorded. Confirm it was emptied and refilled.",code="NOT_EMPTY"),409
+        previous=comp["feedId"]
+        comp["feedId"]=fid
+        if emptied:
+            comp["estimatedGrams"]=round(kg*1000,1)
+            data["refills"].append({"compartment":cid,"kilograms":kg,"feedId":fid,"timestamp":utc_timestamp(),
+                                    "note":f"feed changed from {previous} (compartment emptied)"})
+            data["refills"]=data["refills"][-100:]
+            print(f"[AUDIT] compartment {cid} feed {previous} -> {fid}, emptied and refilled {kg} kg by {request_user()}", flush=True)
+        _inventory_write(data)
         return jsonify(_inventory_snapshot(data))
 
 @app.route("/api/feeding/inventory/refill", methods=["POST"])
