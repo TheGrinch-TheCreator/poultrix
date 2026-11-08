@@ -20,6 +20,12 @@ P2 gateway owner-only routes ─────┴─ P3 Settings card ── deplo
 - **A request arrives during feeding:** refused with 409.
 
 ## P1: Pi routes
+**Status (2026-11-08): built, not deployed.**
+- `app.py`: `/api/system/reboot`, `/api/system/power-off`, `_system_power()`, `set_wake_alarm()` (clear, set, read back within ±10 s), `clear_wake_alarm()`, `_feeding_busy()`, `_prepare_for_power_action()` (job stop, schedule-test cancel, FEED:STOP, end maintenance), and a delayed `sudo -n systemctl reboot|poweroff` thread (fixed argv).
+- The owner check uses the tunnel-trusted `X-Poultrix-User` against the env `POULTRIX_OWNER_EMAILS`; an empty list refuses everyone.
+- Offline harness: 21/21. `py_compile` OK.
+- Checked on the Pi (no power action): `sudo -n tee` clears `/sys/class/rtc/rtc0/wakealarm` and the file is world-readable. EEPROM `POWER_OFF_ON_HALT=0` (default).
+
 **Description:** in `app.py`:
 - `POST /api/system/reboot` `{confirm:"REBOOT"}` and `POST /api/system/power-off` `{confirm:"POWEROFF", minutes:5|15|30}` or `{confirm:"POWEROFF", minutes:null, stayOff:true}`.
 - Each request is checked: it must come through the tunnel (localhost) from a user in `POULTRIX_OWNER_EMAILS` (env on the Pi, same value as the Worker), and no feeding may be active.
@@ -27,7 +33,7 @@ P2 gateway owner-only routes ─────┴─ P3 Settings card ── deplo
 - **Wake alarm:** `sudo -n tee` writes `0`, then `+seconds`, to `/sys/class/rtc/rtc0/wakealarm`; it's read back and must be within ±5 s of the expected wake time, or the request is refused with 500.
 
 **Acceptance:**
-- [ ] Offline harness (stubbed subprocess and serial):
+- [x] Offline harness (stubbed subprocess and serial):
   - wrong or missing confirm → 400;
   - bad minutes → 400;
   - not owner → 403;
@@ -36,7 +42,7 @@ P2 gateway owner-only routes ─────┴─ P3 Settings card ── deplo
   - alarm read-back mismatch → 500, no power-off;
   - stay off clears the alarm;
   - argv exact.
-- [ ] `py_compile` OK.
+- [x] `py_compile` OK.
 
 **Files:** `raspberry-pi/app.py`, plus the systemd env on the Pi (`POULTRIX_OWNER_EMAILS`) · **Scope:** M
 

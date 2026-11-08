@@ -3467,6 +3467,139 @@ def inventory_initialize():
         _inventory_write(data)
         return jsonify(_inventory_snapshot(data))
 
+# ============================================================
+# SYSTEM POWER (SPEC-system-power.md): owner-only safe reboot / power-off
+# ============================================================
+# Fixed commands only (no shell, nothing built from request data). The Pi 5
+# RTC wake alarm powers the board back on after a timed power-off. The
+# Arduino is USB-powered by the Pi, so climate control may stop while off.
+import subprocess as _subprocess
+
+SYSTEM_POWER_WAKE_MINUTES = (5, 15, 30)
+SYSTEM_POWER_DELAY_SECONDS = 2.0
+RTC_WAKEALARM = "/sys/class/rtc/rtc0/wakealarm"
+system_power_lock = threading.Lock()
+system_power_pending = None
+
+
+def _owner_emails():
+    return {e.strip().lower() for e in os.environ.get("POULTRIX_OWNER_EMAILS", "").split(",") if e.strip()}
+
+
+def _sudo(args, input_text=None):
+    return _subprocess.run(["sudo", "-n", *args], input=input_text, text=True,
+                           capture_output=True, timeout=15)
+
+
+def _write_wakealarm(value):
+    result = _sudo(["tee", RTC_WAKEALARM], value + "\n")
+    if result.returncode != 0:
+        raise RuntimeError(f"wakealarm write failed: {result.stderr.strip()[:200]}")
+
+
+def set_wake_alarm(seconds):
+    """Clear, set +seconds, then read back. Returns the wake epoch or raises."""
+    _write_wakealarm("0")
+    _write_wakealarm(f"+{int(seconds)}")
+    expected = time.time() + seconds
+    stored = int((Path(RTC_WAKEALARM).read_text().strip() or "0"))
+    if abs(stored - expected) > 10:
+        raise RuntimeError(f"wakealarm read back {stored}, expected about {int(expected)}")
+    return stored
+
+
+def clear_wake_alarm():
+    _write_wakealarm("0")
+
+
+def _feeding_busy():
+    with feeding_lock:
+        if feeding_pending is not None or any(g.get("status") in ("DISPENSING", "STARTED") for g in feeding_gates.values()):
+            return True
+    with feed_job_lock:
+        return feed_job.get("status") in ("starting", "running")
+
+
+def _prepare_for_power_action():
+    """Stop feeding and end any maintenance session before going down."""
+    feed_job_stop.set()
+    cancel_schedule_test()
+    send_command("FEED:STOP")
+    with bypass_lock:
+        maintenance = bool(bypass_token)
+    if maintenance:
+        bypass_shutdown()
+
+
+def _run_power_command(args):
+    global system_power_pending
+    time.sleep(SYSTEM_POWER_DELAY_SECONDS)
+    print(f"[SYSTEM] running: sudo -n {' '.join(args)}", flush=True)
+    try:
+        result = _sudo(args)
+        failed = result.returncode != 0
+        detail = result.stderr.strip()[:200]
+    except Exception as error:  # timeout or missing sudo
+        failed, detail = True, str(error)
+    if failed:
+        print(f"[SYSTEM] {' '.join(args)} failed: {detail}", flush=True)
+        with system_power_lock:
+            system_power_pending = None
+
+
+def _system_power(action):
+    global system_power_pending
+    user = request_user()
+    if user.lower() not in _owner_emails():
+        return jsonify(error="Only the farm owner can do this", code="OWNER_ONLY"), 403
+    body = request.get_json(silent=True) or {}
+    if body.get("confirm") != ("REBOOT" if action == "reboot" else "POWEROFF"):
+        return jsonify(error="Confirmation required"), 400
+    minutes, stay_off = None, False
+    if action == "power-off":
+        stay_off = body.get("stayOff") is True
+        minutes = body.get("minutes")
+        if stay_off and minutes is not None:
+            return jsonify(error="Stay off takes no wake time"), 400
+        if not stay_off and (type(minutes) is not int or minutes not in SYSTEM_POWER_WAKE_MINUTES):
+            return jsonify(error="Wake time must be 5, 15 or 30 minutes"), 400
+    if _feeding_busy():
+        return jsonify(error="Feed is being dispensed; try again when it finishes"), 409
+    with system_power_lock:
+        if system_power_pending:
+            return jsonify(error="A restart or power-off is already in progress"), 409
+        system_power_pending = action
+    wake_at = None
+    try:
+        if action == "power-off":
+            if stay_off:
+                clear_wake_alarm()
+            else:
+                wake_at = set_wake_alarm(minutes * 60)
+    except Exception as error:
+        with system_power_lock:
+            system_power_pending = None
+        print(f"[SYSTEM] wake alarm failed, not powering off: {error}", flush=True)
+        return jsonify(error="The wake timer could not be set, so the Pi was not powered off"), 500
+    _prepare_for_power_action()
+    wake_iso = datetime.fromtimestamp(wake_at, timezone.utc).isoformat() if wake_at else None
+    what = "reboot" if action == "reboot" else ("power-off, stay off" if stay_off else f"power-off {minutes} min (wake {wake_iso})")
+    print(f"[AUDIT] system {what} by {user}", flush=True)
+    args = ["systemctl", "reboot"] if action == "reboot" else ["systemctl", "poweroff"]
+    threading.Thread(target=_run_power_command, args=(args,), daemon=True).start()
+    return jsonify(success=True, action=action, minutes=minutes, stayOff=stay_off, wakeAt=wake_iso), 202
+
+
+@app.route("/api/system/reboot", methods=["POST"])
+def system_reboot():
+    return _system_power("reboot")
+
+
+@app.route("/api/system/power-off", methods=["POST"])
+def system_power_off():
+    return _system_power("power-off")
+
+
 if __name__ == "__main__":
 
     print("")
