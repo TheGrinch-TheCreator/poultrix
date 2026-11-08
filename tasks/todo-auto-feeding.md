@@ -39,6 +39,22 @@ A1 feeding_schedule.py + unit tests ─┬─ A2 trough calibration (Pi + mainte
 **Files:** `raspberry-pi/feeding_schedule.py`, `tests/auto-feeding/test_feeding_schedule.py`, `package.json` · **Scope:** S
 
 ## A2: Trough calibration
+**Status (2026-11-08): deployed** (Pi `app.py` `1422176d`, `feeding_schedule.py` `aaa1fec3`, backup `app_backup_before_trough_cal_*`; Worker `maintenance` `73172a56`). Live after deploy: trough `ESTIMATED -369.8 g`, feeding reading `not_commissioned` (expected until F-A).
+- **Pi** (`app.py`):
+  - `trough_raw_samples` buffer (filled by the serial parser), `trough_calibration.json`, `trough_grams()`, `trough_feeding_reading()` (A1 `trough_valid`);
+  - `POST /api/bypass/trough-zero` (10 fresh readings, spread ≤ 2,000 counts, clears the factor);
+  - `POST /api/bypass/trough-check {grams}` (100–5000 g, factor within ±10 % of 83.97);
+  - `/api/feeding/weight` → `trough.status = CALIBRATED`, Pi grams, `firmwareGrams`, `feedingReading`;
+  - `/api/bypass/status` → `trough`.
+- **Gateway:** 2 maintenance routes (90 s timeout); maintenance now 14, main app 24 (none).
+- **Console:** "Trough scale" card (live grams/raw, feeding-reading status, Zero trough / Check 500 g with confirm and about 20 s wait).
+- **Checks:**
+  - A2 harness 17/17 (accept/refuse paths, persisted, calibrated grams, unstable → invalid);
+  - earlier harnesses updated to copy `feeding_schedule.py` (still pass);
+  - gateway ALL PASS; both builds OK.
+- **Deploy note:** the Pi now needs **`app.py`, `stage_schedule.py` and `feeding_schedule.py`**.
+- **Firmware:** reads one raw sample every 2 s (no averaging). If F-A shows more than 25 g of noise, averaging in the firmware would be the fix (ask first).
+
 **Description:**
 - **Pi:**
   - `trough_calibration.json`;
@@ -49,9 +65,9 @@ A1 feeding_schedule.py + unit tests ─┬─ A2 trough calibration (Pi + mainte
 - **Console:** a "Trough scale" section with the live raw value, calibrated grams, the two steps and instructions.
 
 **Acceptance:**
-- [ ] Offline harness: zero / check accept and refuse cases.
-- [ ] Gateway tests (maintenance 14 routes, main app none).
-- [ ] Builds.
+- [x] Offline harness: zero / check accept and refuse cases.
+- [x] Gateway tests (maintenance 14 routes, main app none).
+- [x] Builds.
 
 **Files:** `raspberry-pi/app.py`, `src/lib/server/pi-gateway.ts`, `tests/pi-gateway/*`, `maintenance-site/src/Console.tsx` · **Scope:** M · **Depends on:** A1 (validity helper)
 

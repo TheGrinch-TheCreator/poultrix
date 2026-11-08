@@ -108,6 +108,7 @@ inline(upstreamCalls.length === 0, " no upstream call for refused power requests
   const r = await handlePiGateway(req("/api/pi/system/reboot", { method: "POST", token: owner, body: "{}" }), noOwner);
   inline(r.status === 403, " empty owner list refuses everyone");
 }
+await check("trough-zero not exposed on main app", req("/api/pi/bypass/trough-zero", { method: "POST", token: owner, body: "{}" }), 404);
 await check("confirm-stage not exposed on main app", req("/api/pi/bypass/confirm-stage", { method: "POST", token: owner, headers: { "x-poultrix-maintenance": "mt" }, body: "{}" }), 404);
 upstreamCalls.length = 0;
 await check("snapshot ignores a client maintenance header", req("/api/pi/snapshot", { token: owner, headers: { "x-poultrix-maintenance": "mt" } }), 200);

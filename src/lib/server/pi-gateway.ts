@@ -74,6 +74,9 @@ const ROUTES: readonly PiRoute[] = [
   { path: "/bypass/resume", upstream: "/api/bypass/resume", methods: POST, maintenance: true },
   { path: "/bypass/exit", upstream: "/api/bypass/exit", methods: POST, maintenance: true },
   { path: "/bypass/confirm-stage", upstream: "/api/bypass/confirm-stage", methods: POST, maintenance: true },
+  // Trough calibration takes 10 readings at 2 s each (SPEC-auto-feeding A2).
+  { path: "/bypass/trough-zero", upstream: "/api/bypass/trough-zero", methods: POST, maintenance: true, timeoutMs: SLOW_MS },
+  { path: "/bypass/trough-check", upstream: "/api/bypass/trough-check", methods: POST, maintenance: true, timeoutMs: SLOW_MS },
   { path: "/bypass/schedule-test", upstream: "/api/bypass/schedule-test", methods: POST, maintenance: true },
   { path: "/bypass/schedule-test/cancel", upstream: "/api/bypass/schedule-test/cancel", methods: POST, maintenance: true },
   // Camera (MJPEG); the only route that accepts ?access_token=

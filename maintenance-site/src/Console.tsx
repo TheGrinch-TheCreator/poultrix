@@ -23,6 +23,10 @@ type BypassStatus = {
   simulation?: { active?: boolean; stage?: string; framesAnalyzed?: number; confidence?: number | null };
   schedule?: StageSchedule;
   manualStageHistory?: { at: string; from: string | null; to: string }[];
+  trough?: {
+    raw: number | null; zeroRaw: number | null; countsPerGram: number | null; zeroAt: string | null; checkedAt: string | null;
+    commissioned: boolean; grams: number | null; reading: { valid: boolean; grams: number | null; reason: string | null };
+  };
 };
 const STAGES = ["STARTER", "GROWER", "FINISHER"] as const;
 const title = (stage: string | null | undefined) => (stage ? stage.charAt(0) + stage.slice(1).toLowerCase() : "—");
@@ -95,6 +99,24 @@ export function Console() {
     try {
       const result = await call<{ changed?: boolean; previous?: string | null }>("confirm-stage", { stage: target });
       setMessage(result.changed ? `Stage set to ${title(target)} (was ${title(result.previous)}). The Arduino confirmed it.` : `The house is already on ${title(target)}.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+      if (sessionExpired(error)) clearSession();
+    } finally { setBusy(false); }
+  }
+
+  async function troughStep(step: "trough-zero" | "trough-check") {
+    const prompt = step === "trough-zero"
+      ? "Zero the trough?\n\nThe trough must be EMPTY and still. This takes about 20 seconds."
+      : "Check with the 500 g weight?\n\nPut the 500 g weight in the otherwise empty trough and keep it still. This takes about 20 seconds.";
+    if (!window.confirm(prompt)) return;
+    setBusy(true);
+    setMessage(step === "trough-zero" ? "Zeroing the trough… keep it still (about 20 s)." : "Checking 500 g… keep it still (about 20 s).");
+    try {
+      const result = await call<{ zeroRaw?: number; countsPerGram?: number; spreadCounts?: number }>(step, step === "trough-check" ? { grams: 500 } : {});
+      setMessage(step === "trough-zero"
+        ? `Trough zeroed (raw ${result.zeroRaw}, spread ${result.spreadCounts} counts). Now put the 500 g weight in and press Check 500 g.`
+        : `Trough calibrated: ${result.countsPerGram} counts/g. Remove the weight; the empty trough should read about 0 g.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
       if (sessionExpired(error)) clearSession();
@@ -296,6 +318,35 @@ export function Console() {
                         ))}
                       </ul>
                     )}
+                  </>
+                );
+              })()}
+            </Card>
+
+            <Card>
+              <CardTitle>Trough scale</CardTitle>
+              {(() => {
+                const trough = status?.trough;
+                const reasons: Record<string, string> = { too_few_samples: "not enough readings", stale: "readings stopped", unstable: "unstable (moving more than 25 g)", negative: "below zero (zero it again)", not_commissioned: "not calibrated yet" };
+                return (
+                  <>
+                    <p className="my-2 text-sm">
+                      {trough?.commissioned ? <>Calibrated · <span className="font-semibold tabular-nums">{trough.grams ?? "—"} g</span></> : "Not calibrated"}
+                      {" · raw "}<span className="tabular-nums">{trough?.raw ?? "—"}</span>
+                    </p>
+                    <p className="mb-2 text-xs text-muted-foreground">
+                      Reading for automatic feeding: {trough?.reading?.valid ? `OK (${trough.reading.grams} g)` : reasons[trough?.reading?.reason ?? ""] ?? "unavailable"}
+                      {trough?.checkedAt ? ` · calibrated ${new Date(trough.checkedAt).toLocaleString()} (${trough.countsPerGram} counts/g)` : ""}
+                    </p>
+                    <ol className="mb-3 list-decimal pl-5 text-xs text-muted-foreground">
+                      <li>Empty the trough, then press <span className="font-semibold">Zero trough</span>.</li>
+                      <li>Put the 500 g weight in, then press <span className="font-semibold">Check 500 g</span>.</li>
+                      <li>Remove the weight: the empty trough should stay within 25 g of 0.</li>
+                    </ol>
+                    <div className="flex flex-wrap gap-2">
+                      <button className={btn} disabled={busy} onClick={() => void troughStep("trough-zero")}>Zero trough</button>
+                      <button className={btn} disabled={busy || !trough?.zeroRaw} onClick={() => void troughStep("trough-check")}>Check 500 g</button>
+                    </div>
                   </>
                 );
               })()}

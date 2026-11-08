@@ -15,6 +15,7 @@ from pathlib import Path
 import json
 
 import stage_schedule
+import feeding_schedule
 
 
 # ============================================================
@@ -221,6 +222,68 @@ ai_cycle_lock = threading.Lock()
 # never runs the window twice. See stage_schedule.py.
 schedule_lock = threading.Lock()
 schedule_attempt = stage_schedule.load_attempt(STAGE_SCHEDULE_PATH)
+
+# ============================================================
+# TROUGH CALIBRATION (SPEC-auto-feeding A2)
+# ============================================================
+# The firmware reports raw HX711 counts every 2 s. The Pi keeps its own
+# calibration (zero + counts/g, set on the maintenance site) and computes
+# trough grams from raw. No calibration constants live in the frontend.
+TROUGH_CAL_PATH = Path(__file__).with_name("trough_calibration.json")
+TROUGH_REFERENCE_COUNTS_PER_GRAM = 83.97  # previous two-point measurement
+TROUGH_CAL_SAMPLES = 10
+TROUGH_CAL_MAX_SPREAD_COUNTS = 2000       # about 24 g
+TROUGH_CHECK_TOLERANCE = 0.10
+trough_raw_samples = deque(maxlen=40)     # (monotonic, raw)
+trough_cal_lock = threading.Lock()
+
+
+def _load_trough_cal():
+    try:
+        data = json.loads(TROUGH_CAL_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) and isinstance(data.get("zeroRaw"), int) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+trough_cal = _load_trough_cal()
+
+
+def _save_trough_cal(data):
+    tmp = TROUGH_CAL_PATH.with_name(TROUGH_CAL_PATH.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    os.replace(tmp, TROUGH_CAL_PATH)
+
+
+def trough_commissioned():
+    with trough_cal_lock:
+        cal = dict(trough_cal)
+    return isinstance(cal.get("zeroRaw"), int) and isinstance(cal.get("countsPerGram"), (int, float)) and bool(cal.get("checkedAt"))
+
+
+def trough_grams(raw):
+    with trough_cal_lock:
+        zero, cpg = trough_cal.get("zeroRaw"), trough_cal.get("countsPerGram")
+    if not isinstance(raw, int) or not isinstance(zero, int) or not isinstance(cpg, (int, float)) or not cpg:
+        return None
+    return round((raw - zero) / cpg, 1)
+
+
+def trough_feeding_reading():
+    """Trough grams for feeding decisions, or invalid with a reason."""
+    samples = [(t, trough_grams(raw)) for t, raw in list(trough_raw_samples)]
+    return feeding_schedule.trough_valid(samples, time.monotonic(), trough_commissioned())
+
+
+def _collect_trough_raw(count, timeout):
+    """Fresh raw trough readings taken after this call started."""
+    start = time.monotonic()
+    while time.monotonic() < start + timeout:
+        fresh = [raw for t, raw in list(trough_raw_samples) if t >= start]
+        if len(fresh) >= count:
+            return fresh[:count]
+        time.sleep(0.2)
+    return [raw for t, raw in list(trough_raw_samples) if t >= start]
 
 ai_model = None
 
@@ -487,6 +550,8 @@ def process_message(message):
                 current["updatedAt"] = utc_timestamp()
                 if parts[0] == "RAW" and len(parts) >= 3:
                     current["raw"] = int(parts[1])
+                    if sensor == "troughWeight":
+                        trough_raw_samples.append((time.monotonic(), current["raw"]))
                     current["status"] = parts[2]
                     current["weightGrams"] = float(parts[3]) if parts[2] == "ESTIMATED" and len(parts) >= 4 else None
                 else:
@@ -2053,7 +2118,7 @@ def bypass_status():
         lost_at=bypass_connection_lost_at
     with state_lock:
         relays=list(state.get("fans", [False]*4)) + [bool(state.get("led",False))] + list(state.get("heaters",[False]*2))[:1]
-    return jsonify(active=not bypass_paused,maintenanceAuthenticated=True,manualControlsPaused=bypass_paused,connectionLostAt=lost_at,expiresSeconds=remaining,overrides=overrides,readings=readings,readingsUpdatedAt=readings_at,relays=relays,simulation=simulation_snapshot(),manualStageHistory=_manual_history()[-5:],schedule=current_schedule_status())
+    return jsonify(active=not bypass_paused,maintenanceAuthenticated=True,manualControlsPaused=bypass_paused,connectionLostAt=lost_at,expiresSeconds=remaining,overrides=overrides,readings=readings,readingsUpdatedAt=readings_at,relays=relays,simulation=simulation_snapshot(),manualStageHistory=_manual_history()[-5:],schedule=current_schedule_status(),trough=_trough_status())
 
 STAGE_MANUAL_PATH = Path(__file__).with_name("stage_manual.json")
 STAGE_MANUAL_HISTORY = 20
@@ -2111,6 +2176,85 @@ def bypass_confirm_stage():
     print(f"[AUDIT] manual stage {current or '-'} -> {target} by {request_user()}", flush=True)
     return jsonify(success=True, stage=target, changed=True, previous=current or None,
                    schedule=current_schedule_status())
+
+
+def _trough_status():
+    with trough_cal_lock:
+        cal = dict(trough_cal)
+    with state_lock:
+        raw = (state.get("troughWeight") or {}).get("raw")
+    return {"raw": raw, "zeroRaw": cal.get("zeroRaw"), "countsPerGram": cal.get("countsPerGram"),
+            "zeroAt": cal.get("zeroAt"), "checkedAt": cal.get("checkedAt"),
+            "commissioned": trough_commissioned(), "grams": trough_grams(raw),
+            "reading": trough_feeding_reading()}
+
+
+def _stable_trough_raw():
+    """(median raw, spread) from TROUGH_CAL_SAMPLES fresh readings, or an error response."""
+    with state_lock:
+        online = arduino_online_locked()
+    if not online:
+        return None, (jsonify(error="Arduino offline; no trough readings"), 503)
+    raws = _collect_trough_raw(TROUGH_CAL_SAMPLES, TROUGH_CAL_SAMPLES * 2 + 10)
+    if len(raws) < TROUGH_CAL_SAMPLES:
+        return None, (jsonify(error=f"Only {len(raws)} trough readings arrived; try again"), 503)
+    spread = max(raws) - min(raws)
+    if spread > TROUGH_CAL_MAX_SPREAD_COUNTS:
+        grams = spread / TROUGH_REFERENCE_COUNTS_PER_GRAM
+        return None, (jsonify(error=f"Trough reading unstable: it moved {spread} counts (about {grams:.0f} g) "
+                                    "during the measurement. Keep the trough still and try again.",
+                              spreadCounts=spread, spreadGrams=round(grams, 1)), 409)
+    return (int(sorted(raws)[len(raws) // 2]), spread), None
+
+
+@app.route("/api/bypass/trough-zero", methods=["POST"])
+def bypass_trough_zero():
+    """Step 1 (trough empty): set the zero. Clears the factor until step 2."""
+    global trough_cal
+    if not bypass_authorized():
+        return jsonify(error="Unauthorized"), 403
+    measured, error = _stable_trough_raw()
+    if error:
+        return error
+    zero, spread = measured
+    with trough_cal_lock:
+        trough_cal = {"zeroRaw": zero, "countsPerGram": None, "zeroAt": utc_timestamp(),
+                      "checkedAt": None, "zeroSpreadCounts": spread}
+        _save_trough_cal(trough_cal)
+    print(f"[AUDIT] trough zero {zero} (spread {spread}) by {request_user()}", flush=True)
+    return jsonify(success=True, zeroRaw=zero, spreadCounts=spread, trough=_trough_status())
+
+
+@app.route("/api/bypass/trough-check", methods=["POST"])
+def bypass_trough_check():
+    """Step 2 (known weight in the trough): measure and store counts/g."""
+    global trough_cal
+    if not bypass_authorized():
+        return jsonify(error="Unauthorized"), 403
+    grams = (request.get_json(silent=True) or {}).get("grams", 500)
+    if type(grams) not in (int, float) or not 100 <= grams <= 5000:
+        return jsonify(error="Reference weight must be 100-5000 g"), 400
+    with trough_cal_lock:
+        zero = trough_cal.get("zeroRaw")
+    if not isinstance(zero, int):
+        return jsonify(error="Zero the empty trough first"), 409
+    measured, error = _stable_trough_raw()
+    if error:
+        return error
+    raw, spread = measured
+    cpg = (raw - zero) / grams
+    low = TROUGH_REFERENCE_COUNTS_PER_GRAM * (1 - TROUGH_CHECK_TOLERANCE)
+    high = TROUGH_REFERENCE_COUNTS_PER_GRAM * (1 + TROUGH_CHECK_TOLERANCE)
+    if not low <= cpg <= high:
+        return jsonify(error=f"Measured {cpg:.2f} counts/g, expected about {TROUGH_REFERENCE_COUNTS_PER_GRAM} "
+                             f"(±{int(TROUGH_CHECK_TOLERANCE * 100)}%). Check that the {grams:g} g weight is in an "
+                             "otherwise empty trough, or zero again.", countsPerGram=round(cpg, 3)), 409
+    with trough_cal_lock:
+        trough_cal = {**trough_cal, "countsPerGram": round(cpg, 4), "checkedAt": utc_timestamp(),
+                      "checkGrams": grams, "checkSpreadCounts": spread}
+        _save_trough_cal(trough_cal)
+    print(f"[AUDIT] trough check {grams} g -> {cpg:.3f} counts/g by {request_user()}", flush=True)
+    return jsonify(success=True, countsPerGram=round(cpg, 4), trough=_trough_status())
 
 
 @app.route("/api/bypass/action",methods=["POST"])
@@ -2827,6 +2971,12 @@ def get_feeding_weight():
     if not connected:
         hopper["status"] = "DISCONNECTED"
         trough["status"] = "DISCONNECTED"
+    elif trough_commissioned() and isinstance(trough.get("raw"), int):
+        # Pi calibration (maintenance site) replaces the firmware estimate.
+        trough["firmwareGrams"] = trough.get("weightGrams")
+        trough["weightGrams"] = trough_grams(trough["raw"])
+        trough["status"] = "CALIBRATED"
+    trough["feedingReading"] = trough_feeding_reading()
     maintenance_view = bypass_authorized()
     with bypass_lock:
         if maintenance_view and bypass_token and time.monotonic() < bypass_expires:

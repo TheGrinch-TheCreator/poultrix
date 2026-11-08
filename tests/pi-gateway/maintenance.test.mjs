@@ -31,7 +31,7 @@ const run = async (name, request, want, extra) => {
   ok(name, r.status === want && (!extra || extra(r, t)), `-> ${r.status} ${t.slice(0, 80)}`);
 };
 
-ok("maintenance table = bypass/* + camera + snapshot", MAINTENANCE_ROUTES.every((r) => r.maintenance || ["/camera/stream", "/snapshot"].includes(r.path)) && MAINTENANCE_ROUTES.length === 12, `(${MAINTENANCE_ROUTES.length} routes)`);
+ok("maintenance table = bypass/* + camera + snapshot", MAINTENANCE_ROUTES.every((r) => r.maintenance || ["/camera/stream", "/snapshot"].includes(r.path)) && MAINTENANCE_ROUTES.length === 14, `(${MAINTENANCE_ROUTES.length} routes)`);
 ok("maintenance table has no system power routes", !MAINTENANCE_ROUTES.some((r) => r.path.startsWith("/system/reboot") || r.path.startsWith("/system/power-off")));
 ok("app table has no bypass routes (M3)", !APP_ROUTES.some((r) => r.path.startsWith("/bypass/")) && APP_ROUTES.length === 24, `(${APP_ROUTES.length} routes)`);
 await run("feeding route not exposed", req("/api/pi/feeding/manual/start", { method: "POST", body: "{}" }), 404);
@@ -55,6 +55,12 @@ await run("bypass action forwards token, Pi decides", req("/api/pi/bypass/action
 ok("maintenance header forwarded on bypass route", calls[0]?.init.headers["x-poultrix-maintenance"] === "good-token");
 calls.length = 0;
 await run("confirm-stage forwards token", req("/api/pi/bypass/confirm-stage", { method: "POST", headers: { "x-poultrix-maintenance": "good-token" }, body: JSON.stringify({ stage: "GROWER" }) }), 200);
+calls.length = 0;
+await run("trough-zero forwards token", req("/api/pi/bypass/trough-zero", { method: "POST", headers: { "x-poultrix-maintenance": "good-token" }, body: "{}" }), 200);
+ok("trough-zero reaches fixed Pi path with token", calls[0]?.url === "http://127.0.0.1:5000/api/bypass/trough-zero" && calls[0]?.init.headers["x-poultrix-maintenance"] === "good-token", calls[0]?.url);
+await run("trough-check via GET", req("/api/pi/bypass/trough-check", { headers: { "x-poultrix-maintenance": "good-token" } }), 405);
+calls.length = 0;
+await run("confirm-stage again", req("/api/pi/bypass/confirm-stage", { method: "POST", headers: { "x-poultrix-maintenance": "good-token" }, body: JSON.stringify({ stage: "GROWER" }) }), 200);
 ok("confirm-stage reaches fixed Pi path with token", calls[0]?.url === "http://127.0.0.1:5000/api/bypass/confirm-stage" && calls[0]?.init.headers["x-poultrix-maintenance"] === "good-token", calls[0]?.url);
 calls.length = 0;
 await run("snapshot with valid token (again)", req("/api/pi/snapshot", { headers: { "x-poultrix-maintenance": "good-token" } }), 200);
