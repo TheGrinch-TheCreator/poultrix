@@ -18,6 +18,7 @@ const users = {
   owner: { id: "u-owner", email: "JohnKarlDuenas@gmail.com", email_confirmed_at: "2026-01-01" },
   unconfirmed: { id: "u-unc", email: "johnkarlduenas2@gmail.com", email_confirmed_at: null },
   stranger: { id: "u-x", email: "stranger@example.com", email_confirmed_at: "2026-01-01" },
+  helper: { id: "u-h", email: "helper@example.com", email_confirmed_at: "2026-01-01" },
 };
 const tokenFor = (u, extra = {}) => sign({ ...base, sub: u.id, email: u.email, ...extra });
 
@@ -36,7 +37,8 @@ globalThis.fetch = async (url, init = {}) => {
 };
 const upstreamCalls = [];
 const env = {
-  SUPABASE_URL: SUPA, SUPABASE_PUBLISHABLE_KEY: "pk", POULTRIX_ALLOWED_EMAILS: " johnkarlduenas@gmail.com , johnkarlduenas2@gmail.com",
+  SUPABASE_URL: SUPA, SUPABASE_PUBLISHABLE_KEY: "pk", POULTRIX_ALLOWED_EMAILS: " johnkarlduenas@gmail.com , johnkarlduenas2@gmail.com, helper@example.com",
+  POULTRIX_OWNER_EMAILS: " JohnKarlDuenas@gmail.com ",
   POULTRIX_HISTORY: {
     fetch: async (url, init) => {
       upstreamCalls.push({ url, init });
@@ -87,6 +89,25 @@ inline(upstreamCalls[0].url === "http://127.0.0.1:5000/api/status", " upstream U
 upstreamCalls.length = 0;
 // Maintenance moved to its own site (maintenance-site M3): no bypass on the main app.
 await check("bypass/status not exposed on main app", req("/api/pi/bypass/status", { token: owner, headers: { "x-poultrix-maintenance": "mt" } }), 404);
+// System power: owner only (SPEC-system-power).
+const helper = await tokenFor(users.helper);
+upstreamCalls.length = 0;
+await check("reboot by owner", req("/api/pi/system/reboot", { method: "POST", token: owner, body: JSON.stringify({ confirm: "REBOOT" }) }), 200);
+inline(upstreamCalls.length === 1 && upstreamCalls[0].url === "http://127.0.0.1:5000/api/system/reboot" && upstreamCalls[0].init.headers["x-poultrix-user"] === "johnkarlduenas@gmail.com", " reboot reaches fixed Pi path as the owner");
+await check("power-off by owner", req("/api/pi/system/power-off", { method: "POST", token: owner, body: JSON.stringify({ confirm: "POWEROFF", minutes: 5 }) }), 200);
+upstreamCalls.length = 0;
+await check("reboot by approved non-owner", req("/api/pi/system/reboot", { method: "POST", token: helper, body: "{}" }), 403, (_, t) => t.includes("OWNER_ONLY"));
+await check("power-off by approved non-owner", req("/api/pi/system/power-off", { method: "POST", token: helper, body: "{}" }), 403, (_, t) => t.includes("OWNER_ONLY"));
+await check("helper can still read", req("/api/pi/snapshot", { token: helper }), 200);
+upstreamCalls.length = 0;
+await check("reboot signed out", req("/api/pi/system/reboot", { method: "POST", body: "{}" }), 401);
+await check("reboot via GET", req("/api/pi/system/reboot", { token: owner }), 405);
+inline(upstreamCalls.length === 0, " no upstream call for refused power requests");
+{
+  const noOwner = { ...env, POULTRIX_OWNER_EMAILS: "" };
+  const r = await handlePiGateway(req("/api/pi/system/reboot", { method: "POST", token: owner, body: "{}" }), noOwner);
+  inline(r.status === 403, " empty owner list refuses everyone");
+}
 await check("confirm-stage not exposed on main app", req("/api/pi/bypass/confirm-stage", { method: "POST", token: owner, headers: { "x-poultrix-maintenance": "mt" }, body: "{}" }), 404);
 upstreamCalls.length = 0;
 await check("snapshot ignores a client maintenance header", req("/api/pi/snapshot", { token: owner, headers: { "x-poultrix-maintenance": "mt" } }), 200);

@@ -12,6 +12,8 @@ export type PiGatewayEnv = {
   SUPABASE_URL?: string;
   SUPABASE_PUBLISHABLE_KEY?: string;
   POULTRIX_ALLOWED_EMAILS?: string;
+  /** Accounts allowed to reboot / power off the Pi (SPEC-system-power). */
+  POULTRIX_OWNER_EMAILS?: string;
 };
 
 type Method = "GET" | "POST";
@@ -25,6 +27,8 @@ type PiRoute = {
   maintenance?: boolean;
   /** Stream the response body (camera). */
   stream?: boolean;
+  /** Owner accounts only (POULTRIX_OWNER_EMAILS), e.g. reboot / power-off. */
+  owner?: boolean;
   /** Upstream timeout; defaults depend on method. */
   timeoutMs?: number;
 };
@@ -58,6 +62,9 @@ const ROUTES: readonly PiRoute[] = [
   { path: "/feeding/inventory/initialize", upstream: "/api/feeding/inventory/initialize", methods: POST },
   { path: "/ai/classify", upstream: "/api/ai/classify", methods: POST, timeoutMs: SLOW_MS },
   { path: "/sensors/check", upstream: "/api/sensors/check", methods: POST },
+  // System power (owner only; SPEC-system-power)
+  { path: "/system/reboot", upstream: "/api/system/reboot", methods: POST, owner: true },
+  { path: "/system/power-off", upstream: "/api/system/power-off", methods: POST, owner: true },
   // Maintenance (also needs the Pi's maintenance token)
   { path: "/bypass/login", upstream: "/api/bypass/login", methods: POST, maintenance: true },
   { path: "/bypass/status", upstream: "/api/bypass/status", methods: GET, maintenance: true },
@@ -192,9 +199,9 @@ async function confirmedEmail(token: string, sub: string, supabaseUrl: string, a
   return entry.confirmed ? entry.email : null;
 }
 
-function allowedEmails(env: PiGatewayEnv): Set<string> {
+function emailList(value: string | undefined): Set<string> {
   return new Set(
-    (env.POULTRIX_ALLOWED_EMAILS ?? "")
+    (value ?? "")
       .split(",")
       .map((email) => email.trim().toLowerCase())
       .filter(Boolean),
@@ -216,7 +223,7 @@ type Identity = { ok: true; user: string } | { ok: false; response: Response };
 async function supabaseIdentity(request: Request, url: URL, route: PiRoute, env: PiGatewayEnv): Promise<Identity> {
   const supabaseUrl = (env.SUPABASE_URL ?? process.env["SUPABASE_URL"] ?? "").replace(/\/$/, "");
   const apiKey = env.SUPABASE_PUBLISHABLE_KEY ?? process.env["SUPABASE_PUBLISHABLE_KEY"] ?? "";
-  const allowed = allowedEmails(env);
+  const allowed = emailList(env.POULTRIX_ALLOWED_EMAILS);
   if (!supabaseUrl || !apiKey || allowed.size === 0) {
     return { ok: false, response: json({ error: "Remote access is not configured" }, 503) };
   }
@@ -234,6 +241,9 @@ async function supabaseIdentity(request: Request, url: URL, route: PiRoute, env:
   }
   if (!email || !allowed.has(email)) {
     return { ok: false, response: json({ error: "Account not approved for Poultrix", code: "NOT_APPROVED" }, 403) };
+  }
+  if (route.owner && !emailList(env.POULTRIX_OWNER_EMAILS).has(email)) {
+    return { ok: false, response: json({ error: "Only the farm owner can do this", code: "OWNER_ONLY" }, 403) };
   }
   return { ok: true, user: email };
 }

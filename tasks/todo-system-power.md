@@ -47,13 +47,15 @@ P2 gateway owner-only routes ─────┴─ P3 Settings card ── deplo
 **Files:** `raspberry-pi/app.py`, plus the systemd env on the Pi (`POULTRIX_OWNER_EMAILS`) · **Scope:** M
 
 ## P2: Gateway owner-only routes
+**Status (2026-11-08): built, not deployed.** `PiRoute.owner`, the `POULTRIX_OWNER_EMAILS` env (Worker secret, to be set at deploy), `system/reboot` and `system/power-off` on `APP_ROUTES` (now 24); none on the maintenance site (12). Gateway tests ALL PASS (owner 200 with the fixed Pi path and owner user header; approved non-owner 403 `OWNER_ONLY` with no upstream call; signed out 401; GET 405; empty owner list refuses; non-owner can still read). tsc 13 (unchanged), lint clean for the gateway, build OK.
+
 **Description:** a `PiRoute.owner` flag:
 - the `supabase` auth checks the confirmed email against `POULTRIX_OWNER_EMAILS` (Worker secret), else 403 `OWNER_ONLY`;
 - two `APP_ROUTES` entries;
 - not in `MAINTENANCE_ROUTES`.
 
 **Acceptance:**
-- [ ] `npm run test:gateway`:
+- [x] `npm run test:gateway`:
   - owner → 200;
   - approved non-owner → 403 `OWNER_ONLY`;
   - signed out → 401;
