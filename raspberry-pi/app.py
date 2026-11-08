@@ -154,7 +154,9 @@ state_lock = threading.Lock()
 feeding_lock = threading.Lock()
 feeding_gates = {str(i): {"status": "UNKNOWN", "durationMs": 0, "estimatedGrams": None, "updatedAt": None} for i in range(1, 3)}
 feeding_events = deque(maxlen=100)
-feeding_rates = {1: 101.39, 2: 157.7}  # g/s; compartment 2 measured 2026-11-08 (see FEED_RATES)
+# Gate model (see FEED_RATES): grams = offset + rate * seconds.
+feeding_rates = {1: 101.39, 2: 124.1}  # g/s
+feeding_offsets = {1: 0.0, 2: 52.2}    # g per opening (servo travel)
 feeding_pending = None
 feeding_last_error = None
 
@@ -573,7 +575,7 @@ def process_message(message):
                 gate = feeding_gates[gate_id]
                 previous = gate["status"]
                 gate.update(status="DISPENSING" if status in ("STARTED", "DISPENSING") else status,
-                            durationMs=ms, estimatedGrams=(round(ms / 1000 * feeding_rates[int(gate_id)], 1) if feeding_rates[int(gate_id)] is not None else None),
+                            durationMs=ms, estimatedGrams=(round(feeding_schedule.gate_grams(ms / 1000, feeding_rates[int(gate_id)], feeding_offsets.get(int(gate_id), 0.0)), 1) if feeding_rates[int(gate_id)] is not None else None),
                             updatedAt=utc_timestamp())
                 if status == "STARTED":
                     feeding_pending = None
@@ -2088,7 +2090,7 @@ def schedule_test_start():
         compartment=inv.get("selectedCompartment")
         if compartment not in FEED_RATES or compartment not in inv.get("eligibleCompartments",[]):
             raise ValueError("No eligible feed compartment assigned to this stage")
-        ms=round(target/FEED_RATES[compartment]*1000)
+        ms=round(feeding_schedule.gate_seconds(target, FEED_RATES[compartment], FEED_OFFSETS[compartment])*1000)
         if not 100<=ms<=10000: raise ValueError("Calculated feeding exceeds 10-second gate limit; test cannot start")
         with schedule_test_lock:
             if schedule_test["status"] in ("countdown","dispensing"):
@@ -3024,10 +3026,13 @@ FEED_CONFIG_PATH = _Path(__file__).with_name("feeding_config.json")
 # Fixed stage-based daily allowance (g/bird/day), configurable prototype estimates.
 FEED_FIXED_DAILY_GRAMS = {"STARTER": 35.0, "GROWER": 90.0, "FINISHER": 135.0}
 FEED_SESSIONS = {"STARTER": 6, "GROWER": 4, "FINISHER": 4}
-# grams/sec with all five gates open. Compartment 2 measured 2026-11-08 (Checkpoint F-B):
-# hopper drops of 250 g / 1.529 s and 233 g / 1.534 s, plus 250 g caught hole by hole
-# -> 157.7 g/s (was 103.00). Compartment 1 still the preliminary value.
-FEED_RATES = {1: 101.39, 2: 157.7}
+# Gate model, all five gates open: grams = FEED_OFFSETS + FEED_RATES * seconds.
+# Compartment 2 measured 2026-11-08 (Checkpoint F-B), hopper drop vs gate time:
+# 1.002 s -> 177 g, 1.529 s -> 250 g, 1.534 s -> 233 g, 1.902 s -> 289 g
+# (and 250 g caught hole by hole at 1.53 s). Least squares: 52.2 g + 124.1 g/s
+# (residuals within +-9 g). Compartment 1 is still the preliminary 101.39 g/s.
+FEED_RATES = feeding_rates
+FEED_OFFSETS = feeding_offsets
 DEFAULT_FEED_CONFIG = {"birdCount": None, "batchStartDate": None, "times": [], "timezone": "Asia/Manila", "automaticEnabled": False}
 
 def _feed_plan(config, stage):
@@ -3124,8 +3129,9 @@ def feeding_config_api():
     return jsonify({**config, **plan, "confirmedStage": stage,
                     **({"newBatch": new_batch} if new_batch else {}),
                     "selectedCompartment": compartment,
-                    "estimatedSeconds": round(target / FEED_RATES[compartment], 3) if target and compartment in FEED_RATES else None,
+                    "estimatedSeconds": round(feeding_schedule.gate_seconds(target, FEED_RATES[compartment], FEED_OFFSETS[compartment]), 3) if target and compartment in FEED_RATES else None,
                     "calibrationRatesGramsPerSecond": FEED_RATES,
+                    "calibrationOffsetsGrams": FEED_OFFSETS,
                     "troughCalibration": {"zeroOffsetRaw": 377696, "countsPerGram": 83.97, "referenceMassGrams": 500, "twoPointMeasured": True, "commissioned": FEED_TROUGH_CALIBRATED, "verificationRequired": not FEED_TROUGH_CALIBRATED},
                     "dispensingRatesCommissioned": True,
                     "automaticEnabled": bool(config.get("automaticEnabled")) and FEED_AUTOMATION_COMMISSIONED,
@@ -3189,7 +3195,11 @@ def _feed_inputs(target, compartment):
     rate = FEED_RATES.get(compartment)
     if not isinstance(rate, (int, float)) or not math.isfinite(rate) or rate <= 0:
         raise RuntimeError("Invalid dispensing rate")
-    duration = target / rate
+    offset = FEED_OFFSETS.get(compartment, 0.0)
+    duration = feeding_schedule.gate_seconds(target, rate, offset)
+    if duration < feeding_schedule.MIN_GATE_SECONDS:
+        minimum = feeding_schedule.gate_grams(feeding_schedule.MIN_GATE_SECONDS, rate, offset)
+        raise RuntimeError(f"Smallest amount from compartment {compartment} is about {minimum:.0f} g")
     if duration > FEED_TOTAL_SECONDS_MAX:
         raise RuntimeError("Required gate duration exceeds per-job safety limit")
     leftover = record.get("weightGrams")
@@ -3197,7 +3207,7 @@ def _feed_inputs(target, compartment):
         leftover = None
     return {"leftoverGrams": round(leftover, 2) if leftover is not None else None,
             "feedToAddGrams": round(target, 2),
-            "estimatedSeconds": round(duration, 3), "rateGramsPerSecond": rate}
+            "estimatedSeconds": round(duration, 3), "rateGramsPerSecond": rate, "offsetGrams": offset}
 
 def _feed_job_run(compartment, target, source, calculation):
     global feeding_last_error
@@ -3206,7 +3216,7 @@ def _feed_job_run(compartment, target, source, calculation):
         fresh = _feed_inputs(target, compartment)
         with feed_job_lock:
             feed_job.update(status="running", measuredGrams=0, error=None, updatedAt=utc_timestamp())
-        remaining_ms = round(target / calculation["rateGramsPerSecond"] * 1000)
+        remaining_ms = round(calculation["estimatedSeconds"] * 1000)
         if remaining_ms <= 0:
             with feed_job_lock:
                 feed_job.update(status="completed", estimatedDispensedGrams=0, updatedAt=utc_timestamp())
@@ -3248,7 +3258,7 @@ def _feed_job_run(compartment, target, source, calculation):
             elapsed_ms += ms
             remaining_ms -= ms
             with feed_job_lock:
-                feed_job.update(estimatedDispensedGrams=round(elapsed_ms / 1000 * calculation["rateGramsPerSecond"], 2),
+                feed_job.update(estimatedDispensedGrams=round(feeding_schedule.gate_grams(elapsed_ms / 1000, calculation["rateGramsPerSecond"], calculation.get("offsetGrams", 0.0)), 2),
                                 updatedAt=utc_timestamp())
             time.sleep(.15)
         with feed_job_lock:
@@ -3422,7 +3432,7 @@ def run_feeding_session(slot, now):
         return record("skipped", "no_stage_compatible_compartment")
     reading = trough_feeding_reading()
     trough_before = reading.get("grams") if reading.get("valid") else None
-    decision = feeding_schedule.session_plan(target, reading, FEED_RATES[compartment])
+    decision = feeding_schedule.session_plan(target, reading, FEED_RATES[compartment], FEED_OFFSETS[compartment])
     if decision["action"] == "skip":
         return record("skipped", decision["reason"], trough_before)
     # Persist first: an interrupted session is never repeated.
@@ -3606,7 +3616,7 @@ def process_message(message):
             ms = int(duration)
             with state_lock:
                 stage = state.get("stage")
-            estimated = (round(ms / 1000 * feeding_rates[int(gate)], 1) if feeding_rates.get(int(gate)) is not None else None) if event == "COMPLETED" else None
+            estimated = (round(feeding_schedule.gate_grams(ms / 1000, feeding_rates[int(gate)], feeding_offsets.get(int(gate), 0.0)), 1) if feeding_rates.get(int(gate)) is not None else None) if event == "COMPLETED" else None
             _history_insert("feed_events",
                 ["recorded_at","gate","event_type","duration_ms","estimated_dispensed_grams","stage","message"],
                 [utc_timestamp(),int(gate),event,ms,estimated,stage,None])

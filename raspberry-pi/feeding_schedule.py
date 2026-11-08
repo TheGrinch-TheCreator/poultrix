@@ -44,6 +44,20 @@ FULL_MARGIN_GRAMS = 100.0
 LATE_WINDOW = timedelta(minutes=15)
 FAULT_LIMIT = 3
 KEEP_DAYS = 7
+MIN_GATE_SECONDS = 0.1
+
+
+def gate_seconds(grams, rate, offset=0.0):
+    """Gate time for `grams`: each opening delivers `offset` g while the
+    servos move, plus `rate` g/s (measured 2026-11-08 for compartment 2)."""
+    return (grams - offset) / rate
+
+
+def gate_grams(seconds, rate, offset=0.0):
+    """Estimated grams for a gate opening of `seconds`."""
+    return offset + rate * seconds if seconds > 0 else 0.0
+
+
 RESULTS = ("dispensed", "partial", "skipped", "missed", "fault")
 
 
@@ -72,7 +86,7 @@ def trough_valid(samples, now, commissioned=True):
     return {"valid": True, "grams": round(max(0.0, median), 1), "reason": None}
 
 
-def session_need(target, trough, rate):
+def session_need(target, trough, rate, offset=0.0):
     """How much to dispense for one session. Returns
     {action: dispense|skip, grams, seconds, partial, reason}."""
     def skip(reason):
@@ -88,16 +102,18 @@ def session_need(target, trough, rate):
         return skip("trough_at_target")
     if need < MIN_DISPENSE_GRAMS:
         return skip("too_small")
-    seconds = need / rate
+    seconds = gate_seconds(need, rate, offset)
+    if seconds < MIN_GATE_SECONDS:
+        return skip("below_minimum_gate")
     partial = seconds > MAX_DISPENSE_SECONDS
     if partial:
         seconds = MAX_DISPENSE_SECONDS
-        need = seconds * rate
+        need = gate_grams(seconds, rate, offset)
     return {"action": "dispense", "grams": round(need, 1), "seconds": round(seconds, 3),
             "partial": partial, "reason": "cap_reached" if partial else None}
 
 
-def session_plan(target, reading, rate):
+def session_plan(target, reading, rate, offset=0.0):
     """Rough-check mode (owner 2026-11-08, while the trough scale drifts):
     dispense the full target (10 s cap) unless a VALID trough reading shows
     more than target + FULL_MARGIN_GRAMS. An unreadable trough still feeds.
@@ -114,11 +130,13 @@ def session_plan(target, reading, rate):
     if readable and _number(reading.get("grams")) and reading["grams"] > target + FULL_MARGIN_GRAMS:
         return skip("trough_full")
     grams = float(target)
-    seconds = grams / rate
+    seconds = gate_seconds(grams, rate, offset)
+    if seconds < MIN_GATE_SECONDS:
+        return skip("below_minimum_gate")
     partial = seconds > MAX_DISPENSE_SECONDS
     if partial:
         seconds = MAX_DISPENSE_SECONDS
-        grams = seconds * rate
+        grams = gate_grams(seconds, rate, offset)
     reasons = [r for r in ("cap_reached" if partial else None, None if readable else "trough_unreadable") if r]
     return {"action": "dispense", "grams": round(grams, 1), "seconds": round(seconds, 3), "partial": partial,
             "reason": ",".join(reasons) or None, "troughReadable": readable}

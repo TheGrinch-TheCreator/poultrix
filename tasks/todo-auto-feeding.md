@@ -183,7 +183,12 @@ A1 feeding_schedule.py + unit tests ─┬─ A2 trough calibration (Pi + mainte
   - So compartment 2 delivers about **157.7 g/s**, not 103.00: sessions were giving about 240 g instead of 157.5 g.
   - **`FEED_RATES[2] = 157.7`** (owner-approved), deployed: Pi `app.py` `41649071`; frontend stale rate text removed (Worker `app` `ad066385`). A 157.5 g session is now a 0.999 s gate.
   - Compartment 1 (101.39) is not re-measured yet.
-- **Next:** one confirmation dispense (hopper drop ≈ 158 g?); Test 2 (500 g weight → skip, or feed if unreadable); Test 3 (maintenance open → skip); then restore times and decide on commissioning.
+- **Confirmation at 157.7 g/s:** a 158 g target (1.002 s) gave **177 g** (+12 %). With 300 g (1.902 s) → **289 g**. A linear fit over the 4 points gives **grams = 52.2 + 124.1 × seconds** (residuals within ±9 g): a fixed amount per opening while the servos move.
+  - Implemented as `FEED_OFFSETS[2] = 52.2`, `FEED_RATES[2] = 124.1`, with `feeding_schedule.gate_seconds/gate_grams` used by `_feed_inputs`, the job estimate, gate events, the schedule test, `session_plan`/`session_need` (`below_minimum_gate` when < 0.1 s).
+  - A 157.5 g session is now a **0.849 s** gate; the minimum is about 65 g.
+  - Tests: 30 unit tests, all 6 harnesses.
+  - Deployed: Pi `app.py` `24e229d3`, `feeding_schedule.py` `bbbab912`.
+- **Next:** one confirmation dispense at the new model (hopper drop ≈ 158 g?); Test 2 (500 g weight → skip, or feed if unreadable); Test 3 (maintenance open → skip); then restore times and decide on commissioning.
 
 - [ ] Set the Pi commissioning flag temporarily, with a test session time a few minutes ahead. Empty trough → about the target is dispensed; weigh it on a kitchen scale.
 - [ ] Trough above the target → skipped with a reason.

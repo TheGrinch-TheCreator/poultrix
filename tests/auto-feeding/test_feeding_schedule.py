@@ -142,6 +142,36 @@ class SessionPlanRough(unittest.TestCase):
         self.assertEqual(fs.session_plan(157.5, self.VALID(0), 0)["reason"], "bad_rate")
 
 
+class GateModel(unittest.TestCase):
+    """Compartment 2, measured 2026-11-08: grams = 52.2 + 124.1 * seconds."""
+    RATE, OFFSET = 124.1, 52.2
+
+    def test_round_trip_and_measurements(self):
+        for seconds, measured in ((1.002, 177), (1.902, 289)):
+            self.assertAlmostEqual(fs.gate_grams(seconds, self.RATE, self.OFFSET), measured, delta=10)
+        t = fs.gate_seconds(157.5, self.RATE, self.OFFSET)
+        self.assertAlmostEqual(t, 0.849, places=3)
+        self.assertAlmostEqual(fs.gate_grams(t, self.RATE, self.OFFSET), 157.5, places=6)
+        self.assertEqual(fs.gate_grams(0, self.RATE, self.OFFSET), 0.0)
+
+    def test_plan_uses_offset(self):
+        r = fs.session_plan(157.5, {"valid": True, "grams": 0, "reason": None}, self.RATE, self.OFFSET)
+        self.assertEqual((r["action"], r["grams"]), ("dispense", 157.5))
+        self.assertAlmostEqual(r["seconds"], 0.849, places=3)
+
+    def test_below_minimum_gate(self):
+        # 0.1 s already gives about 65 g, so 60 g can't be dispensed.
+        r = fs.session_plan(60, None, self.RATE, self.OFFSET)
+        self.assertEqual((r["action"], r["reason"]), ("skip", "below_minimum_gate"))
+        r = fs.session_need(157.5, 100, self.RATE, self.OFFSET)  # need 57.5 g
+        self.assertEqual((r["action"], r["reason"]), ("skip", "below_minimum_gate"))
+
+    def test_cap_with_offset(self):
+        r = fs.session_plan(5000, None, self.RATE, self.OFFSET)
+        self.assertTrue(r["partial"])
+        self.assertAlmostEqual(r["grams"], round(self.OFFSET + self.RATE * fs.MAX_DISPENSE_SECONDS, 1))
+
+
 class DueSession(unittest.TestCase):
     def test_window(self):
         self.assertEqual(fs.due_session(at(13, 59), GROWER_TIMES, set())["due"], None)
