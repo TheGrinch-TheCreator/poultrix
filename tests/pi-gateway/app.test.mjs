@@ -87,6 +87,11 @@ inline(upstreamCalls[0].url === "http://127.0.0.1:5000/api/status", " upstream U
 upstreamCalls.length = 0;
 // Maintenance moved to its own site (maintenance-site M3): no bypass on the main app.
 await check("bypass/status not exposed on main app", req("/api/pi/bypass/status", { token: owner, headers: { "x-poultrix-maintenance": "mt" } }), 404);
+await check("confirm-stage not exposed on main app", req("/api/pi/bypass/confirm-stage", { method: "POST", token: owner, headers: { "x-poultrix-maintenance": "mt" }, body: "{}" }), 404);
+upstreamCalls.length = 0;
+await check("snapshot ignores a client maintenance header", req("/api/pi/snapshot", { token: owner, headers: { "x-poultrix-maintenance": "mt" } }), 200);
+inline(upstreamCalls.length === 1 && !("x-poultrix-maintenance" in upstreamCalls[0].init.headers), " main app never forwards the maintenance token");
+upstreamCalls.length = 0;
 await check("bypass/login not exposed on main app", req("/api/pi/bypass/login", { method: "POST", token: owner, body: "{}" }), 404);
 inline(upstreamCalls.length === 0, " no upstream call for bypass routes");
 await check("camera with ?access_token", req(`/api/pi/camera/stream?access_token=${owner}`), 200, (r) => r.headers.get("content-type").startsWith("multipart/"));

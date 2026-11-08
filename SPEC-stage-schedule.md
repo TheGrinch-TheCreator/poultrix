@@ -112,6 +112,50 @@ When the owner saves a batch start date **that differs from the saved one** and 
 - **AGENTS.md and CLAUDE.md:** replace the "reference-only" rule with "the batch day gates *when* the AI analyses and *which* stage it may confirm (forward only); the AI confirmation still sets the stage; no fallback by day."
 - **Obsidian:** AI and stage notes, the decision record (AD-23), CURRENT_STATUS, CHANGELOG, TEST_RESULTS.
 
+### 9. Manual stage confirmation and a clean main app (addendum S5, APPROVED 2026-11-08)
+Why: the AI can keep calling Grower birds Starter. With no fallback by day, the stage would then never move. The owner confirms the real stage by hand on the maintenance site.
+
+Owner decisions (2026-11-08):
+- (b) **any stage, including backwards**, but only by hand on the maintenance site. Without a manual confirmation the AI stays forward-only and day-gated.
+- The main app follows the new stage like any confirmed stage. It **never shows that the maintenance site is or was used**.
+- The maintenance site may show simulated/maintenance values (it's the "if anything goes wrong" console).
+
+Design:
+- **Pi route `POST /api/bypass/confirm-stage {stage}`** (maintenance token):
+  - Any of the 3 stages.
+  - Sends `STAGE:<X>` and waits up to 5 s for the Arduino to report it. It works during the maintenance session, and is refused while feed is dispensing or while the Arduino is offline.
+  - Resets the AI's 3-in-a-row candidate. From the new stage the daily check continues, forward-only and day-gated (e.g. day 11 + manual Grower → no check until day 25).
+  - Recorded in `stage_manual.json` (last 20: time, from, to, client) and as `[AUDIT] manual stage <FROM> -> <TO> by ip:<client>`. Shown only on the maintenance site (`/api/bypass/status` → `manualStageHistory`).
+- **What the main app sees** (honest, no fabricated AI data):
+  - The confirmed stage and the schedule (day, next check, overdue) come from the real Arduino stage.
+  - The AI fields (latest detection, confidence, votes, last check, last AI transition) stay what the camera really did; a manual change writes none of them.
+  - Nothing says "manual" or "maintenance".
+- **AI detection on the main app (owner choice, option 2):**
+  - an AI detection (stage, confidence, votes, "last seen") is shown only when it agrees with the confirmed stage, otherwise "—";
+  - values are never altered or invented;
+  - the maintenance site always shows the real detection in a "Real AI detection" panel, with a note when it differs.
+- **No maintenance traces in the main app's data:** the Pi adds simulation data only for requests with a valid maintenance token:
+  - `/api/status` sensor overlays and `maintenanceActive`;
+  - `/api/feeding/weight` simulated weights;
+  - `/api/ai/status` → `simulation`.
+
+  Without a token, every reading is the real one, and feeding errors during a session say "Hardware busy, try again in a few minutes".
+- **`POST /api/ai/classify`** (main app Analyze now) always runs a real camera check. It no longer runs the maintenance simulation.
+- **Gateway:**
+  - new `MAINTENANCE_ROUTES` entry `bypass/confirm-stage` (POST);
+  - the maintenance gateway forwards the token on all its routes (so its snapshot gets the simulation overlay);
+  - the main gateway never forwards it (tests prove a client-supplied header is dropped).
+- **Console:** the old "Stage test" (simulated analysis, which needed the main app's Analyze now) is replaced by **"Confirm real stage"**:
+  - day, current stage, overdue and next check;
+  - Starter, Grower and Finisher buttons with a confirm dialog;
+  - the last manual changes;
+  - "Analyse real stage" (camera check).
+- **Main app:** the AI Stage page drops its simulation branches.
+- **Tests:**
+  - unit tests unchanged;
+  - gateway tests for the new route and header rules;
+  - offline harness: manual any-direction, refused while dispensing, AI fields untouched, no `simulation` / `maintenanceActive` / overlays without a token.
+
 ## Commands
 ```
 python -m unittest discover -s tests/stage-schedule -v   # pure schedule logic (dev machine)
@@ -161,8 +205,9 @@ Follow the existing files. Python uses small functions, uppercase module constan
   - set Grower or Finisher from the day alone;
   - move the stage backwards automatically;
   - start feeding from this module (that's `auto-feeding`);
-  - add gateway routes for this;
-  - show simulated or maintenance stages as real.
+  - add gateway routes beyond the one maintenance route in §9;
+  - show simulated or maintenance values in the main app (they belong on the maintenance site only);
+  - fabricate AI detections, confidence or votes, including for a manual stage change.
 
 ## Success criteria
 1. With no batch date, no automatic AI cycle runs and the stage never changes. The Flock page asks for the date.
@@ -182,3 +227,4 @@ Follow the existing files. Python uses small functions, uppercase module constan
 3. Still Starter on day ≥ 25: the AI may confirm Grower or Finisher, whichever it sees with confidence.
 4. Saving a different batch start date on days 1–10 sets the Arduino to STARTER.
 5. An overdue stage check shows on the Flock page **and** in Alerts.
+

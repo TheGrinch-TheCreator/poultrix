@@ -119,6 +119,25 @@ S1 stage_schedule.py + unit tests ── S2 app.py wiring ── Pi deploy ─�
 
 **Files:** `src/lib/live-hardware.ts`, `src/routes/flock.tsx`, `src/routes/ai-stage.tsx`, `src/lib/live-alerts.ts`, `src/lib/stage-requirements.ts` · **Scope:** M · **Depends on:** S2
 
+## S5: Manual stage confirmation and a clean main app (spec §9, approved 2026-11-08)
+**Status (2026-11-08): deployed** (Pi `02ff76d0`; Worker `app` `dbfa2c6e`; Worker `maintenance` `76fb4fd9`). Live: confirm-stage → 404 on the main site, 403 with a bad token on the maintenance site.
+- **Pi** (`app.py` sha `02ff76d0`, backup `app_backup_before_stage_manual_*`):
+  - `POST /api/bypass/confirm-stage` (any stage, Arduino-acknowledged; refused while dispensing or offline);
+  - `stage_manual.json` history and an `[AUDIT]` line;
+  - `/api/bypass/status` adds `manualStageHistory` and `schedule`;
+  - simulation overlays, `maintenanceActive` and `simulation` only with a valid maintenance token;
+  - Analyze now never runs the simulation;
+  - neutral "hardware busy" wording.
+- **Gateway:** `bypass/confirm-stage` (maintenance, 12 routes); the maintenance gateway forwards the token on all routes; the main gateway never does.
+- **Console:** "Confirm real stage" replaces the stage test (day, current stage, overdue, next check, 3 buttons with a confirm step, last 5 changes, camera check).
+- **Main app:** the AI Stage page has no simulation branches; subtitle changed.
+- **Option 2:** `agreeingDetection()` in `live-hardware.ts`. Dashboard, Flock, AI Stage (result, confidence, votes; no candidate name), the schedule "last seen" text and the overdue alert show an AI detection only when it matches the confirmed stage, otherwise "—". The console has a "Real AI detection" panel. History & Reports still lists the raw saved detections.
+- **Checks:**
+  - gateway tests ALL PASS (new: confirm-stage 404 on main, client header dropped, token forwarded on maintenance snapshot);
+  - S5 harness 24/24; S2 harness and unit tests still pass;
+  - tsc 13 errors (15 before, none new); builds OK;
+  - on the Pi, main view has no `maintenanceActive` / `simulation`, and confirm-stage without a token → 403.
+
 ## S4: Docs
 **Description:**
 - **AGENTS.md and CLAUDE.md:** the new stage rule, AI cycle timing, `stage_schedule.py`, the Pi deploy now copies two files.

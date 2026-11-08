@@ -66,6 +66,7 @@ const ROUTES: readonly PiRoute[] = [
   { path: "/bypass/return-live", upstream: "/api/bypass/return-live", methods: POST, maintenance: true },
   { path: "/bypass/resume", upstream: "/api/bypass/resume", methods: POST, maintenance: true },
   { path: "/bypass/exit", upstream: "/api/bypass/exit", methods: POST, maintenance: true },
+  { path: "/bypass/confirm-stage", upstream: "/api/bypass/confirm-stage", methods: POST, maintenance: true },
   { path: "/bypass/schedule-test", upstream: "/api/bypass/schedule-test", methods: POST, maintenance: true },
   { path: "/bypass/schedule-test/cancel", upstream: "/api/bypass/schedule-test/cancel", methods: POST, maintenance: true },
   // Camera (MJPEG); the only route that accepts ?access_token=
@@ -309,7 +310,10 @@ export function createPiGateway(options: { routes: readonly PiRoute[]; auth: Gat
       body = read;
       headers["content-type"] = "application/json";
     }
-    if (route.maintenance) {
+    // Only the maintenance site forwards the token (all its routes, so its
+    // snapshot gets maintenance values). The main app never does, so it can
+    // never see maintenance data (SPEC-stage-schedule §9).
+    if (options.auth === "maintenance") {
       const maintenance = request.headers.get("x-poultrix-maintenance");
       if (maintenance && maintenance.length <= 200) headers["x-poultrix-maintenance"] = maintenance;
     }

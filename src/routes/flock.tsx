@@ -5,7 +5,7 @@ import { FlockCameraPreview } from "@/components/poultrix/FlockCameraPreview";
 import { BatchDaySummary, BatchTimeline } from "@/components/poultrix/StageSchedule";
 import { useEffect, useState } from "react";
 import { Card, CardTitle, PageHeader, Pill, StageBadge } from "@/components/poultrix/ui";
-import { useAI, useHardware, stageName } from "@/lib/live-hardware";
+import { agreeingDetection, useAI, useHardware, stageName } from "@/lib/live-hardware";
 import { piFetch } from "@/lib/pi-client";
 import type { Stage } from "@/lib/demo-data";
 import { getMyFarm } from "@/lib/farm-store";
@@ -44,8 +44,9 @@ function FlockPage() {
   const { data: ai } = useAI();
   const cameraReady = hardware?.camera?.connected === true;
   const stage = stageName(hardware?.stage) as Stage | null;
-  const detected = stageName(ai?.detectedStage) as Stage | null;
-  const confidence = typeof ai?.confidence === "number" ? `${ai.confidence.toFixed(1)}%` : "—";
+  const agreeing = agreeingDetection(ai, hardware?.stage);
+  const detected = (agreeing?.stage ?? null) as Stage | null;
+  const confidence = typeof agreeing?.confidence === "number" ? `${agreeing.confidence.toFixed(1)}%` : "—";
   // Stage-only midpoint estimates from Poultrix System Documentation v3.
   // The document specifies age-dependent ranges; without bird age, this is an estimate.
   const allowances: Record<Stage, { dailyGrams: number; sessions: number; range: string }> = {

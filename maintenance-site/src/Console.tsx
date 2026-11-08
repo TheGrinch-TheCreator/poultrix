@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Card, CardTitle, Pill } from "@/components/poultrix/ui";
 import poultrixLogo from "@/assets/poultrix-logo.png";
 import { piRequest, SESSION_KEY, sessionExpired, useCameraUrl, usePoll } from "./pi";
+import type { AI, StageSchedule } from "@/lib/live-hardware";
 
 // Maintenance console: today's bypass controls (moved from the main app's
 // /bypass page) plus a live camera and a status strip. Bypass password only.
@@ -20,13 +21,18 @@ type BypassStatus = {
   relays?: boolean[];
   readings?: Partial<Record<SensorKey, number | null>>;
   simulation?: { active?: boolean; stage?: string; framesAnalyzed?: number; confidence?: number | null };
+  schedule?: StageSchedule;
+  manualStageHistory?: { at: string; from: string | null; to: string }[];
 };
+const STAGES = ["STARTER", "GROWER", "FINISHER"] as const;
+const title = (stage: string | null | undefined) => (stage ? stage.charAt(0) + stage.slice(1).toLowerCase() : "—");
 type Snapshot = {
   status?: {
     connected?: boolean; piSeenByArduino?: boolean | null; operatingStatus?: string; stage?: string;
     temperature?: number | null; humidity?: number | null; fansOn?: number; heatersOn?: number; led?: boolean;
     camera?: { connected?: boolean };
   } | null;
+  ai?: AI | null;
 };
 
 function readToken(): string {
@@ -43,7 +49,6 @@ export function Console() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("Maintenance controls are inactive.");
   const [seconds, setSeconds] = useState("0.5");
-  const [stage, setStage] = useState("STARTER");
   const [values, setValues] = useState<Record<SensorKey, string>>({ temperature: "", ldr: "", hopper: "", trough: "" });
   const [relayState, setRelayState] = useState<Record<number, boolean>>({});
 
@@ -78,6 +83,18 @@ export function Console() {
       else if (result.action === "dispense") setMessage(`Arduino acknowledged compartment ${result.group} for ${Number(result.durationMs) / 1000}s. Check the gate on the camera.`);
       else if (result.simulation) setMessage("Test value saved. Fan/LED responses (when applicable) were acknowledged; real sensors and calibration unchanged.");
       else setMessage("Command accepted by the Raspberry Pi. Check the hardware on the camera.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+      if (sessionExpired(error)) clearSession();
+    } finally { setBusy(false); }
+  }
+
+  async function confirmStage(target: (typeof STAGES)[number]) {
+    if (!window.confirm(`Set the house to ${title(target)}? Temperature and lighting change immediately.`)) return;
+    setBusy(true);
+    try {
+      const result = await call<{ changed?: boolean; previous?: string | null }>("confirm-stage", { stage: target });
+      setMessage(result.changed ? `Stage set to ${title(target)} (was ${title(result.previous)}). The Arduino confirmed it.` : `The house is already on ${title(target)}.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
       if (sessionExpired(error)) clearSession();
@@ -221,18 +238,67 @@ export function Console() {
             </Card>
 
             <Card>
-              <CardTitle>Chicken stage test target</CardTitle>
-              <p className="my-2 text-xs text-muted-foreground">Sets a test target only. Three "Analyze now" runs on the app's AI Stage page confirm it and apply a real stage change.</p>
-              <div className="flex flex-wrap gap-2">
-                <select className={inputClass + " max-w-xs"} value={stage} onChange={(event) => setStage(event.target.value)}>
-                  {["NO_CHICKEN", "STARTER", "GROWER", "FINISHER"].map((value) => <option key={value} value={value}>{value === "NO_CHICKEN" ? "No Chicken Detected" : value}</option>)}
-                </select>
-                <button className={btn} disabled={busy || !active} onClick={() => void perform("action", { action: "stage", stage })}>Apply stage</button>
-                <button className={btn} disabled={busy || !active} onClick={() => void perform("analyse-real")}>Analyse real stage</button>
-              </div>
-              {status?.simulation?.active && (
-                <p className="mt-2 text-sm">{status.simulation.stage === "NO_CHICKEN" ? "No Chicken Detected · simulated" : `SIMULATED ${status.simulation.stage} · ${status.simulation.framesAnalyzed}/30 · ${status.simulation.confidence ?? "—"}%`}</p>
-              )}
+              <CardTitle>Confirm real stage</CardTitle>
+              {(() => {
+                const schedule = status?.schedule;
+                const current = hw?.stage?.toUpperCase() ?? null;
+                return (
+                  <>
+                    <p className="my-2 text-sm">
+                      {schedule?.batchDay ? `Day ${schedule.batchDay}` : "No batch start date"} · current stage <span className="font-semibold">{title(current)}</span>
+                      {schedule?.nextCheckAt ? ` · next AI check ${new Date(schedule.nextCheckAt).toLocaleString()}` : ""}
+                    </p>
+                    {schedule && schedule.overdueDays > 0 && (
+                      <p className="mb-2 text-sm text-warn">{title(schedule.overdueStage)} not confirmed by the AI for {schedule.overdueDays} day{schedule.overdueDays === 1 ? "" : "s"}.</p>
+                    )}
+                    <p className="mb-3 text-xs text-muted-foreground">Sets the real stage on the Arduino (any stage, also backwards). The app shows it as the confirmed stage. The AI then continues from this stage, forward only.</p>
+                    <div className="flex flex-wrap gap-2">
+                      {STAGES.map((value) => (
+                        <button key={value} className={btn} disabled={busy || current === value} onClick={() => void confirmStage(value)}>
+                          {current === value ? `${title(value)} (current)` : `Set ${title(value)}`}
+                        </button>
+                      ))}
+                      <button className={btn} disabled={busy || !active} onClick={() => void perform("analyse-real")}>Analyse real stage (camera check)</button>
+                    </div>
+                    {(() => {
+                      // The real AI result, always (the main app shows a detection only when it agrees with the confirmed stage).
+                      const ai = snapshot?.ai;
+                      const votes = ai?.votes ?? {};
+                      const last = schedule?.lastAttempt;
+                      return (
+                        <div className="mt-4 rounded-lg border p-3 text-sm">
+                          <p className="font-semibold">Real AI detection</p>
+                          <p className="mt-1">
+                            {ai?.detectedStage ? `${title(ai.detectedStage.toUpperCase())}${typeof ai.confidence === "number" ? ` · ${ai.confidence.toFixed(1)}%` : ""}` : "No result yet"}
+                            {ai?.lastInference ? ` · ${new Date(ai.lastInference).toLocaleString()}` : ""}
+                            {ai?.cycleRunning ? " · analysing now" : ""}
+                          </p>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Votes: Starter {votes["Starter"] ?? 0} · Grower {votes["Grower"] ?? 0} · Finisher {votes["Finisher"] ?? 0}
+                            {ai?.transitionStatus ? ` · status ${ai.transitionStatus.replaceAll("_", " ")}` : ""}
+                            {ai?.transitionStatus === "pending" ? ` (${ai.transitionConfirmations ?? 0}/${ai.transitionRequired ?? 3}${ai.transitionCandidate ? `, candidate ${title(ai.transitionCandidate)}` : ""})` : ""}
+                          </p>
+                          {last && (
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              Last daily check {last.date}: {last.result.replaceAll("_", " ")} after {last.cycles} checks, last seen {last.detectedStage ? `${title(last.detectedStage)}${typeof last.confidence === "number" ? ` ${last.confidence.toFixed(1)}%` : ""}` : "no clear result"}
+                            </p>
+                          )}
+                          {ai?.detectedStage && current && ai.detectedStage.toUpperCase() !== current && (
+                            <p className="mt-1 text-xs text-warn">Differs from the confirmed stage, so the main app shows "—" for the AI detection.</p>
+                          )}
+                        </div>
+                      );
+                    })()}
+                    {!!status?.manualStageHistory?.length && (
+                      <ul className="mt-3 space-y-1 text-xs text-muted-foreground">
+                        {status.manualStageHistory.slice().reverse().map((entry) => (
+                          <li key={entry.at}>{new Date(entry.at).toLocaleString()}: {title(entry.from)} → {title(entry.to)} (set here)</li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
+                );
+              })()}
             </Card>
           </>
         )}

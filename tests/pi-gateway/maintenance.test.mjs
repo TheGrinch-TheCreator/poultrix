@@ -31,7 +31,7 @@ const run = async (name, request, want, extra) => {
   ok(name, r.status === want && (!extra || extra(r, t)), `-> ${r.status} ${t.slice(0, 80)}`);
 };
 
-ok("maintenance table = bypass/* + camera + snapshot", MAINTENANCE_ROUTES.every((r) => r.maintenance || ["/camera/stream", "/snapshot"].includes(r.path)) && MAINTENANCE_ROUTES.length === 11, `(${MAINTENANCE_ROUTES.length} routes)`);
+ok("maintenance table = bypass/* + camera + snapshot", MAINTENANCE_ROUTES.every((r) => r.maintenance || ["/camera/stream", "/snapshot"].includes(r.path)) && MAINTENANCE_ROUTES.length === 12, `(${MAINTENANCE_ROUTES.length} routes)`);
 ok("app table has no bypass routes (M3)", !APP_ROUTES.some((r) => r.path.startsWith("/bypass/")) && APP_ROUTES.length === 22, `(${APP_ROUTES.length} routes)`);
 await run("feeding route not exposed", req("/api/pi/feeding/manual/start", { method: "POST", body: "{}" }), 404);
 await run("ai/classify not exposed", req("/api/pi/ai/classify", { method: "POST" }), 404);
@@ -52,6 +52,12 @@ ok("token validation cached (no extra Pi status calls)", statusCalls === before,
 calls.length = 0;
 await run("bypass action forwards token, Pi decides", req("/api/pi/bypass/action", { method: "POST", headers: { "x-poultrix-maintenance": "good-token" }, body: JSON.stringify({ action: "stop" }) }), 200);
 ok("maintenance header forwarded on bypass route", calls[0]?.init.headers["x-poultrix-maintenance"] === "good-token");
+calls.length = 0;
+await run("confirm-stage forwards token", req("/api/pi/bypass/confirm-stage", { method: "POST", headers: { "x-poultrix-maintenance": "good-token" }, body: JSON.stringify({ stage: "GROWER" }) }), 200);
+ok("confirm-stage reaches fixed Pi path with token", calls[0]?.url === "http://127.0.0.1:5000/api/bypass/confirm-stage" && calls[0]?.init.headers["x-poultrix-maintenance"] === "good-token", calls[0]?.url);
+calls.length = 0;
+await run("snapshot with valid token (again)", req("/api/pi/snapshot", { headers: { "x-poultrix-maintenance": "good-token" } }), 200);
+ok("snapshot forwards token (maintenance values)", calls.some((c) => c.url.endsWith("/api/snapshot") && c.init.headers["x-poultrix-maintenance"] === "good-token"));
 ok("no supabase needed (env has no SUPABASE_*)", !("SUPABASE_URL" in env));
 await run("body > 4 KB", req("/api/pi/bypass/action", { method: "POST", headers: { "x-poultrix-maintenance": "good-token" }, body: "x".repeat(5000) }), 413);
 await run("wrong method", req("/api/pi/bypass/login"), 405);

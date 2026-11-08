@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Camera, Cpu, Droplets, Fan, Flame, Lightbulb, ScanEye, Sun, Thermometer, Wheat } from "lucide-react";
 import { Card, CardTitle, Pill } from "@/components/poultrix/ui";
-import { useAI, useHardware, display, stageName } from "@/lib/live-hardware";
+import { agreeingDetection, useAI, useHardware, display, stageName } from "@/lib/live-hardware";
 import { usePiEndpoint } from "@/lib/live-endpoints";
 import { formatWeight, readingStatus, formatReadingTime, type WeightPayload } from "@/lib/live-weights";
 
@@ -42,7 +42,8 @@ function Dashboard() {
   const high = typeof temp === "number" && target && temp > target.max;
   const low = typeof temp === "number" && target && temp < target.min;
   const stage = connected ? stageName(hw?.stage) : null;
-  const detectedStage = stageName(ai?.detectedStage);
+  const agreeing = agreeingDetection(ai, hw?.stage);
+  const detectedStage = agreeing?.stage ?? null;
   const gates = Object.entries(feeding?.gates ?? {});
   const activeGates = gates.filter(([, gate]) => gate.status === "DISPENSING");
   const hopper = weight?.hopper;
@@ -58,10 +59,10 @@ function Dashboard() {
           <div className="mt-2 text-5xl font-extrabold">{stage || "—"}</div>
           <p className="mt-2 text-sm text-muted-foreground">{stage ? "Arduino-confirmed growth stage (restored after restart)" : "Waiting for Arduino confirmation"}</p>
           <div className="mt-4 grid grid-cols-2 gap-3">
-            <Stat label="AI confidence" value={typeof ai?.confidence === "number" && Number.isFinite(ai.confidence) && ai?.lastInference ? `${ai.confidence.toFixed(1)}%` : "—"} />
+            <Stat label="AI confidence" value={typeof agreeing?.confidence === "number" && ai?.lastInference ? `${agreeing.confidence.toFixed(1)}%` : "—"} />
             <Stat label="Last analyzed" value={formatDate(ai?.lastInference)} />
           </div>
-          <p className="mt-3 text-xs text-muted-foreground">Latest AI detection: {detectedStage || "Not available"}. The main stage above comes from Arduino confirmation, not an unconfirmed AI prediction.</p>
+          <p className="mt-3 text-xs text-muted-foreground">Latest AI detection: {detectedStage || "—"}. The main stage above comes from Arduino confirmation, not an unconfirmed AI prediction.</p>
         </Card>
         <Card>
           <CardTitle icon={<Thermometer className="h-4 w-4" />} right={<Pill tone={!live || temp == null ? "neutral" : high || low ? "warn" : "ok"}>{!live || temp == null ? "No live reading" : high ? "Above target" : low ? "Below target" : "In range"}</Pill>}>Temperature</CardTitle>

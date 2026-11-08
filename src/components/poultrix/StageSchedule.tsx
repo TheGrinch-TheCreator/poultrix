@@ -38,7 +38,8 @@ function formatCheckTime(iso: string | null | undefined): string {
 function lastAttemptText(schedule: StageSchedule): string | null {
   const attempt = schedule.lastAttempt;
   if (!attempt) return null;
-  const detected = stageName(attempt.detectedStage);
+  // Option 2: name the detection only when it agrees with the confirmed stage.
+  const detected = attempt.detectedStage && attempt.detectedStage === schedule.currentStage ? stageName(attempt.detectedStage) : null;
   const seen = detected
     ? `${detected}${typeof attempt.confidence === "number" ? ` ${attempt.confidence.toFixed(1)}%` : ""}`
     : "no clear result";

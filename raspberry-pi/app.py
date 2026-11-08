@@ -12,6 +12,7 @@ import socket
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
+import json
 
 import stage_schedule
 
@@ -1202,7 +1203,7 @@ def apply_confirmed_stage_to_arduino(target_stage):
     if target not in ("STARTER", "GROWER", "FINISHER") or current not in ("STARTER", "GROWER", "FINISHER") or target == current:
         return {"success": False, "status": "invalid_or_same_stage"}
     if not AI_AUTO_STAGE_TRANSITIONS or not connected or bypass_active():
-        return {"success": False, "status": "disabled_disconnected_or_maintenance"}
+        return {"success": False, "status": "hardware_busy_or_offline"}
     with feeding_lock:
         if feeding_pending is not None or any(g.get("status") == "DISPENSING" for g in feeding_gates.values()):
             return {"success": False, "status": "feeding_active_retry_after_next_cycle"}
@@ -2052,7 +2053,65 @@ def bypass_status():
         lost_at=bypass_connection_lost_at
     with state_lock:
         relays=list(state.get("fans", [False]*4)) + [bool(state.get("led",False))] + list(state.get("heaters",[False]*2))[:1]
-    return jsonify(active=not bypass_paused,maintenanceAuthenticated=True,manualControlsPaused=bypass_paused,connectionLostAt=lost_at,expiresSeconds=remaining,overrides=overrides,readings=readings,readingsUpdatedAt=readings_at,relays=relays,simulation=simulation_snapshot())
+    return jsonify(active=not bypass_paused,maintenanceAuthenticated=True,manualControlsPaused=bypass_paused,connectionLostAt=lost_at,expiresSeconds=remaining,overrides=overrides,readings=readings,readingsUpdatedAt=readings_at,relays=relays,simulation=simulation_snapshot(),manualStageHistory=_manual_history()[-5:],schedule=current_schedule_status())
+
+STAGE_MANUAL_PATH = Path(__file__).with_name("stage_manual.json")
+STAGE_MANUAL_HISTORY = 20
+
+
+def _manual_history():
+    try:
+        data = json.loads(STAGE_MANUAL_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+@app.route("/api/bypass/confirm-stage", methods=["POST"])
+def bypass_confirm_stage():
+    """Owner sets the real stage by hand (any direction). The Arduino stage
+    changes; the AI's own fields are not touched (SPEC-stage-schedule §9)."""
+    if not bypass_authorized():
+        return jsonify(error="Unauthorized"), 403
+    target = str((request.get_json(silent=True) or {}).get("stage") or "").strip().upper()
+    if target not in stage_schedule.STAGES:
+        return jsonify(error="Stage must be STARTER, GROWER or FINISHER"), 400
+    with state_lock:
+        current = str(state.get("stage") or "").strip().upper()
+        online = arduino_online_locked()
+    if not online:
+        return jsonify(error="Arduino offline; the stage was not changed"), 503
+    if target == current:
+        return jsonify(success=True, stage=target, changed=False)
+    with feeding_lock:
+        if feeding_pending is not None or any(g.get("status") == "DISPENSING" for g in feeding_gates.values()):
+            return jsonify(error="Feed is being dispensed; try again when it finishes"), 409
+    if not send_command("STAGE:" + target):
+        return jsonify(error="Unable to send the stage to the Arduino"), 503
+    deadline = time.monotonic() + AI_STAGE_ACK_TIMEOUT_SECONDS
+    observed = current
+    while time.monotonic() < deadline:
+        with state_lock:
+            observed = str(state.get("stage") or "").strip().upper()
+        if observed == target:
+            break
+        time.sleep(0.1)
+    if observed != target:
+        return jsonify(error="Arduino did not confirm the new stage"), 504
+    # A new stage starts a fresh AI candidate; status stays neutral.
+    reset_transition_candidate("idle")
+    entry = {"at": utc_timestamp(), "from": current or None, "to": target, "by": request_user()}
+    history = (_manual_history() + [entry])[-STAGE_MANUAL_HISTORY:]
+    try:
+        tmp = STAGE_MANUAL_PATH.with_name(STAGE_MANUAL_PATH.name + ".tmp")
+        tmp.write_text(json.dumps(history, indent=2), encoding="utf-8")
+        os.replace(tmp, STAGE_MANUAL_PATH)
+    except OSError as error:
+        print(f"[SCHEDULE] Could not save manual stage history: {error}", flush=True)
+    print(f"[AUDIT] manual stage {current or '-'} -> {target} by {request_user()}", flush=True)
+    return jsonify(success=True, stage=target, changed=True, previous=current or None,
+                   schedule=current_schedule_status())
+
 
 @app.route("/api/bypass/action",methods=["POST"])
 def bypass_action():
@@ -2272,15 +2331,17 @@ def get_status():
     result["arduinoOnline"] = result.get("connected") is True and fresh
     result["operatingStatus"] = "LIVE" if live else "OFFLINE"
     result["telemetryFresh"] = fresh
-    result["maintenanceActive"] = bypass_active()
-
-    # Maintenance simulation changes API presentation only.
-    # Actual DHT22 readings and Arduino environmental control are unchanged.
+    # Maintenance simulation changes API presentation only, and only for the
+    # maintenance site (valid token). The main app always gets real readings
+    # and no sign of maintenance (SPEC-stage-schedule §9).
+    maintenance_view = bypass_authorized()
+    if maintenance_view:
+        result["maintenanceActive"] = bypass_active()
     result["actualTemperature"] = result.get("temperature")
     result["temperatureSource"] = "DHT22"
     result["temperatureSimulated"] = False
     with bypass_lock:
-        if bypass_token and time.monotonic() < bypass_expires:
+        if maintenance_view and bypass_token and time.monotonic() < bypass_expires:
             override_temperature = sim_readings.get("temperature")
             if override_temperature is not None:
                 result["temperature"] = override_temperature
@@ -2344,7 +2405,8 @@ def get_ai_status():
             ai_state
         )
 
-    result["simulation"] = simulation_snapshot()
+    if bypass_authorized():
+        result["simulation"] = simulation_snapshot()
     result["schedule"] = current_schedule_status()
     return jsonify(result)
 
@@ -2358,12 +2420,8 @@ def get_ai_status():
     methods=["POST"]
 )
 def manual_ai_classification():
-
-    with bypass_lock:
-        selected = bypass_overrides.get("stage") if bypass_active() else None
-    if selected:
-        result = simulation_start_analysis()
-        return jsonify(result), (200 if result.get("success") else 409)
+    """Analyze now: always a real camera check that never changes the stage
+    (SPEC-stage-schedule). It never runs the maintenance simulation."""
 
     result = (
         run_ai_cycle()
@@ -2582,7 +2640,7 @@ def feeding_status():
 @app.route("/api/feeding/dispense", methods=["POST"])
 def feeding_dispense():
     if bypass_active() and not bypass_authorized():
-        return jsonify(error="Maintenance bypass active"),423
+        return jsonify(error="Hardware busy, try again in a few minutes"),423
     global feeding_pending
     payload = request.get_json(silent=True) or {}
     gate = payload.get("compartment", payload.get("gate"))
@@ -2594,7 +2652,7 @@ def feeding_dispense():
     with state_lock:
         ready = controller_ready_locked()
     if not ready or bypass_active():
-        return jsonify(success=False,error="Online, healthy hardware (Pi seen by Arduino) required; maintenance must be inactive"),423
+        return jsonify(success=False,error="Online, healthy hardware (Pi seen by Arduino) required; hardware busy, try again in a few minutes"),423
     if not (100 <= duration <= 1500):
         return jsonify(success=False,error="Pulse must be between 100 and 1500 ms"),400
     # Continue to the single-pulse serial dispatch below.
@@ -2769,8 +2827,9 @@ def get_feeding_weight():
     if not connected:
         hopper["status"] = "DISCONNECTED"
         trough["status"] = "DISCONNECTED"
+    maintenance_view = bypass_authorized()
     with bypass_lock:
-        if bypass_token and time.monotonic() < bypass_expires:
+        if maintenance_view and bypass_token and time.monotonic() < bypass_expires:
             for key,record in (("hopper",hopper),("trough",trough)):
                 simulated = sim_readings.get(key)
                 if simulated is not None:
@@ -2949,7 +3008,7 @@ def _feed_inputs(target, compartment):
         ready = controller_ready_locked()
         record = dict(state.get("troughWeight") or {})
     if not ready or bypass_active():
-        raise RuntimeError("Online healthy hardware and inactive maintenance required")
+        raise RuntimeError("Online healthy hardware required; hardware busy, try again in a few minutes")
     rate = FEED_RATES.get(compartment)
     if not isinstance(rate, (int, float)) or not math.isfinite(rate) or rate <= 0:
         raise RuntimeError("Invalid dispensing rate")

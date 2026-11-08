@@ -91,7 +91,7 @@ function deriveAlerts(s: Snapshot | null): LiveAlert[] {
     // One id per day: acknowledging hides it until the next failed daily check.
     const stage = schedule.overdueStage.charAt(0) + schedule.overdueStage.slice(1).toLowerCase();
     const last = schedule.lastAttempt;
-    const seen = last?.detectedStage ? ` The last check (${last.date}) saw ${last.detectedStage.charAt(0) + last.detectedStage.slice(1).toLowerCase()}${typeof last.confidence === "number" ? ` at ${last.confidence.toFixed(1)}%` : ""}.` : "";
+    const seen = last?.detectedStage && last.detectedStage === s.status?.stage?.toUpperCase() ? ` The last check (${last.date}) saw ${last.detectedStage.charAt(0) + last.detectedStage.slice(1).toLowerCase()}${typeof last.confidence === "number" ? ` at ${last.confidence.toFixed(1)}%` : ""}.` : "";
     add(out, `stage-overdue-${schedule.overdueStage}-${last?.date ?? schedule.batchDay}`, "warning", `${stage} check overdue`,
       `Day ${schedule.batchDay}: ${stage} has not been confirmed for ${schedule.overdueDays} day${schedule.overdueDays === 1 ? "" : "s"}.${seen}`,
       "Check the camera view and lighting. The Pi tries again at the next daily check.");
