@@ -2282,6 +2282,15 @@ def bypass_action():
             return jsonify(error="Duration must be 0.1 to 10 seconds"),400
         milliseconds=round(seconds*1000)
         command=f"BYPASS:GROUP:{group},{milliseconds}"
+    elif action=="hole":
+        # One servo of a compartment (catch and weigh each hole separately).
+        group=data.get("group"); hole=data.get("hole"); seconds=data.get("seconds")
+        if type(group) is not int or group not in (1,2) or type(hole) is not int or hole not in range(1,6):
+            return jsonify(error="Select compartment 1-2 and hole 1-5"),400
+        if type(seconds) not in (int,float) or isinstance(seconds,bool) or not __import__('math').isfinite(seconds) or not 0.1<=seconds<=10:
+            return jsonify(error="Duration must be 0.1 to 10 seconds"),400
+        milliseconds=round(seconds*1000)
+        command=f"BYPASS:HOLE:{group},{hole},{milliseconds}"
 
     elif action=="stop":command="FEED:STOP"
     elif action=="stage":
@@ -2338,12 +2347,15 @@ def bypass_action():
             expected = f"BYPASS_ACK:RELAY:{index},{int(enabled)}"
             if not bypass_send_confirmed(command, expected):
                 return jsonify(error="Arduino did not confirm relay change"),503
+        elif action == "hole":
+            if not bypass_send_confirmed(command, f"BYPASS_ACK:HOLE:{group},{hole},{milliseconds}"):
+                return jsonify(error="Arduino did not acknowledge the hole test (firmware with BYPASS:HOLE needed)"),503
         elif action == "dispense":
             if not bypass_send_confirmed(command, f"BYPASS_ACK:GROUP:{group},{milliseconds}"):
                 return jsonify(error="Arduino did not acknowledge group dispense. Check BYPASS_ERROR in backend logs, Arduino serial stability, PCA9685 wiring and servo power."),503
         elif not send_command(command):return jsonify(error="Arduino unavailable"),503
     with bypass_lock:bypass_expires=time.monotonic()+BYPASS_SESSION_SECONDS
-    return jsonify(success=True,action=action,group=group if action=="dispense" else None, durationMs=milliseconds if action=="dispense" else None, acknowledged=bool(action in ("relay","dispense")),simulation=action in ("stage","override"))
+    return jsonify(success=True,action=action,group=group if action in ("dispense","hole") else None, hole=hole if action=="hole" else None, durationMs=milliseconds if action in ("dispense","hole") else None, acknowledged=bool(action in ("relay","dispense","hole")),simulation=action in ("stage","override"))
 
 @app.route("/api/bypass/analyse-real",methods=["POST"])
 def bypass_analyse_real():

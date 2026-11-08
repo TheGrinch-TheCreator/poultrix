@@ -80,10 +80,11 @@ export function Console() {
   async function perform(path: string, body?: unknown) {
     setBusy(true);
     try {
-      const result = await call<{ action?: string; group?: number; durationMs?: number; simulation?: boolean }>(path, body);
+      const result = await call<{ action?: string; group?: number; hole?: number; durationMs?: number; simulation?: boolean }>(path, body);
       if (path === "return-live") setMessage("Overrides cleared; the Arduino is back under automatic control. Maintenance stays unlocked.");
       else if (path === "resume") setMessage("Manual bypass resumed.");
       else if (path === "exit") clearSession("Bypass ended. Gates closed and the Arduino is under automatic control.");
+      else if (result.action === "hole") setMessage(`Arduino acknowledged compartment ${result.group}, hole ${result.hole} for ${Number(result.durationMs) / 1000}s. Weigh what you caught.`);
       else if (result.action === "dispense") setMessage(`Arduino acknowledged compartment ${result.group} for ${Number(result.durationMs) / 1000}s. Check the gate on the camera.`);
       else if (result.simulation) setMessage("Test value saved. Fan/LED responses (when applicable) were acknowledged; real sensors and calibration unchanged.");
       else setMessage("Command accepted by the Raspberry Pi. Check the hardware on the camera.");
@@ -229,6 +230,17 @@ export function Console() {
                       disabled={busy || !active || !Number.isFinite(Number(seconds)) || Number(seconds) < 0.1 || Number(seconds) > 10}
                       onClick={() => { if (window.confirm(`Open all 5 servos of compartment ${group} for ${seconds} s? Confirm the gates are clear and supervised.`)) void perform("action", { action: "dispense", group, seconds: Number(seconds) }); }}
                     >Dispense group {group}</button>
+                    <p className="mt-3 text-xs text-muted-foreground">Or one hole at a time (catch and weigh each):</p>
+                    <div className="mt-1 grid grid-cols-5 gap-1">
+                      {[1, 2, 3, 4, 5].map((hole) => (
+                        <button
+                          key={hole}
+                          className={btn + " px-0"}
+                          disabled={busy || !active || !Number.isFinite(Number(seconds)) || Number(seconds) < 0.1 || Number(seconds) > 10}
+                          onClick={() => { if (window.confirm(`Open only hole ${hole} of compartment ${group} for ${seconds} s? Hold your container under it.`)) void perform("action", { action: "hole", group, hole, seconds: Number(seconds) }); }}
+                        >Hole {hole}</button>
+                      ))}
+                    </div>
                   </div>
                 ))}
               </div>

@@ -372,7 +372,37 @@ void updateGroups() {
     Serial.print(F("BYPASS_GROUP_DONE:")); Serial.println(finished);
   }
 }
+// BYPASS:HOLE:<compartment 1-2>,<hole 1-5>,<ms 100-10000>: open ONE servo of a
+// compartment (maintenance only), e.g. to catch and weigh each hole's output.
+// Uses the group timer, so updateGroups()/stopGroups() close it as usual.
+bool handleHoleCommand(const String &command) {
+  if (!command.startsWith("BYPASS:HOLE:")) return false;
+  if (!maintenanceActive) {
+    Serial.println(F("BYPASS_ERROR:NOT_ACTIVE")); return true;
+  }
+  if (groupRunning || gateActive[0] || gateActive[1]) { Serial.println(F("BYPASS_ERROR:BUSY")); return true; }
+  String args = command.substring(12);
+  if (args.length() < 5 || args[1] != ',' || args[3] != ',' ||
+      (args[0] != '1' && args[0] != '2') || args[2] < '1' || args[2] > '5') {
+    Serial.println(F("BYPASS_ERROR:INVALID_HOLE")); return true;
+  }
+  String duration = args.substring(4);
+  for (unsigned int i = 0; i < duration.length(); i++) if (!isDigit(duration[i])) {
+    Serial.println(F("BYPASS_ERROR:INVALID_DURATION")); return true;
+  }
+  unsigned long ms = duration.toInt();
+  if (ms < 100 || ms > GROUP_MAX_MS) { Serial.println(F("BYPASS_ERROR:INVALID_DURATION")); return true; }
+  uint8_t g = args[0] - '1';
+  uint8_t h = args[2] - '1';
+  groupRunning = true; groupRunningId = g + 1; groupStarted = millis(); groupDuration = ms;
+  setPcaAngle(GROUP_CHANNELS[g][h], GROUP_OPEN[g][h]);
+  maintenanceLastPing = millis();
+  Serial.print(F("BYPASS_ACK:HOLE:")); Serial.print(g + 1); Serial.print(','); Serial.print(h + 1);
+  Serial.print(','); Serial.println(ms);
+  return true;
+}
 bool handleGroupCommand(const String &command) {
+  if (handleHoleCommand(command)) return true;
   if (command == "BYPASS:GROUP:STOP") {
     stopGroups();
     Serial.println(F("BYPASS_ACK:GROUP:STOP"));

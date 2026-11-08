@@ -168,6 +168,17 @@ A1 feeding_schedule.py + unit tests ─┬─ A2 trough calibration (Pi + mainte
 - **Lesson:** deploy every changed Pi module together (`app.py`, `stage_schedule.py`, `feeding_schedule.py`).
 
 ### Checkpoint F-B (owner present, supervised)
+**Run 2026-11-08 (owner at the farm):**
+- **Setup:** temporary commissioning drop-in `/etc/systemd/system/poultrix.service.d/feeding-commissioned.conf`; config times set to a single test slot (backup `feeding_config_before_FB.json`). The owner turned the switch on at 13:44:23.
+- **Test 1 (13:47):** the session was persisted as `interrupted`, gate 2 opened 1529 ms and the Arduino confirmed COMPLETED; recorded **dispensed 157.5 g** (`trough_unreadable`, fed the full amount); compartment 2 estimate 3000 → 2842.5 g; fault streak 0. **Grams not weighed:** the trough isn't removable.
+- **Hole-by-hole test added (owner request):**
+  - firmware `BYPASS:HOLE:<c>,<h>,<ms>` (one servo, maintenance only, same timer and limits);
+  - Pi bypass action `hole`;
+  - console Hole 1–5 buttons;
+  - offline 7/7.
+  - Flashed 14:22 (hex `fdbe0dad`, backup `flash_before_hole_test_*`), Pi `app.py` `e4f20bdd`, Worker `maintenance` `d7e90606`.
+- **Next:** the owner weighs each hole at 1.53 s; Test 2 (500 g weight → skip, or feed if unreadable); Test 3 (maintenance open → skip); then restore times and decide on commissioning.
+
 - [ ] Set the Pi commissioning flag temporarily, with a test session time a few minutes ahead. Empty trough → about the target is dispensed; weigh it on a kitchen scale.
 - [ ] Trough above the target → skipped with a reason.
 - [ ] Maintenance open at the session time → skipped.
