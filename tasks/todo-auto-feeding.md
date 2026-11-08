@@ -92,6 +92,13 @@ A1 feeding_schedule.py + unit tests ─┬─ A2 trough calibration (Pi + mainte
 - [ ] Empty trough again: the reading stays within ±25 g of 0 for 5 min.
 
 ## A3: Scheduler wiring (locked)
+**Rule change (owner, 2026-11-08):** use `feeding_schedule.session_plan()` (rough-check mode):
+- full target each session;
+- skip only if a valid trough reading is > target + 100 g;
+- an unreadable trough still feeds and records it.
+
+`session_need()` (precise mode) is kept for later. Checkpoint F-A is replaced by "the trough is calibrated and readable most of the time"; F-B checks the rough mode.
+
 **Description:**
 - Replace `feed_schedule_worker` with one using A1:
   - stage times and targets from `_feed_plan`;

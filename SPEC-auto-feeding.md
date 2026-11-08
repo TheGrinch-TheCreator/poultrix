@@ -40,6 +40,17 @@ Unattended scheduled feeding for the **confirmed stage** (owner requirement 2):
   - The calibration in code (zero 377,696 raw, 83.97 counts/g) clearly no longer matches: the zero has drifted, and the noise is about ±30 g.
 - **Hopper:** 2,216 g `ESTIMATED`. Inventory stock is tracked as estimates (3,000 g each) and **is not decreased after dispensing** (open TODO).
 
+## Rule change 2026-11-08 (owner, after Checkpoint F-A): "rough trough check" mode
+F-A showed the trough load cell is **not accurate enough** for `target − trough`:
+- the empty-trough zero drifts by **±50–80 g within 20–30 min**, in both directions;
+- the noise is ±10–25 g.
+
+Until the scale is fixed, the owner chose **option 2 + (a)**:
+- **Dispense the full session target** each session (10 s cap; partial + alert if more is needed).
+- **Skip only if the trough is clearly full:** a *valid* trough reading **> target + 100 g** (`FULL_MARGIN_GRAMS`; larger than the drift seen) → skip "trough already full".
+- **Unreadable trough** (invalid: unstable, stale, not calibrated): **feed the full target anyway** and record "trough unreadable", with an info alert. This replaces the earlier "skip + alert" (decision 2), which applied to the precise mode.
+- The precise `target − trough` logic (`session_need`) stays in the code for when the scale passes F-A again (a later owner decision).
+
 ## Design
 1. **Trough reading for decisions** (`trough_reading_for_feeding()`). Collect the trough readings of the last 10 s (5 samples). The reading is **valid** only if:
    - all are fresh (< 5 s old);
@@ -132,7 +143,7 @@ python -m py_compile raspberry-pi/app.py raspberry-pi/feeding_schedule.py
 
 ## Decisions (owner, 2026-11-08)
 1. Trough: Zero trough + 500 g check on the maintenance site, stored on the Pi.
-2. Invalid trough reading: skip the session and alert.
+2. ~~Invalid trough reading: skip the session and alert.~~ Superseded 2026-11-08 by the rough-check mode: feed the full target and record "trough unreadable".
 3. Need > 10 s cap: dispense the cap and alert "partial".
 4. Session times: the defaults (Starter 06/09/12/15/18/21; Grower and Finisher 06/10/14/18).
 5. Pi offline at session time: run it if back within 15 min, otherwise missed.

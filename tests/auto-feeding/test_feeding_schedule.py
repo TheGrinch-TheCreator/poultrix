@@ -111,6 +111,37 @@ class SessionNeed(unittest.TestCase):
         self.assertEqual(fs.session_need(157.5, None, self.RATE)["reason"], "no_trough")
 
 
+class SessionPlanRough(unittest.TestCase):
+    """Rough-check mode (owner 2026-11-08): full target unless clearly full."""
+    RATE = 103.0
+    VALID = staticmethod(lambda g: {"valid": True, "grams": g, "reason": None})
+    INVALID = {"valid": False, "grams": None, "reason": "unstable"}
+
+    def test_full_target_regardless_of_small_trough_amounts(self):
+        for grams in (0, 40, 157.5, 257.5):
+            r = fs.session_plan(157.5, self.VALID(grams), self.RATE)
+            self.assertEqual((r["action"], r["grams"], r["troughReadable"]), ("dispense", 157.5, True), grams)
+
+    def test_skip_when_clearly_full(self):
+        r = fs.session_plan(157.5, self.VALID(257.6), self.RATE)
+        self.assertEqual((r["action"], r["reason"], r["grams"]), ("skip", "trough_full", 0))
+
+    def test_unreadable_still_feeds(self):
+        r = fs.session_plan(157.5, self.INVALID, self.RATE)
+        self.assertEqual((r["action"], r["grams"], r["troughReadable"], r["reason"]), ("dispense", 157.5, False, "trough_unreadable"))
+        r = fs.session_plan(157.5, None, self.RATE)
+        self.assertEqual((r["action"], r["troughReadable"]), ("dispense", False))
+
+    def test_cap_and_bad_inputs(self):
+        r = fs.session_plan(1500, self.VALID(0), self.RATE)
+        self.assertEqual((r["action"], r["partial"], r["reason"]), ("dispense", True, "cap_reached"))
+        self.assertAlmostEqual(r["seconds"], fs.MAX_DISPENSE_SECONDS)
+        r = fs.session_plan(1500, self.INVALID, self.RATE)
+        self.assertEqual((r["partial"], r["reason"]), (True, "cap_reached,trough_unreadable"))
+        self.assertEqual(fs.session_plan(0, self.VALID(0), self.RATE)["reason"], "no_target")
+        self.assertEqual(fs.session_plan(157.5, self.VALID(0), 0)["reason"], "bad_rate")
+
+
 class DueSession(unittest.TestCase):
     def test_window(self):
         self.assertEqual(fs.due_session(at(13, 59), GROWER_TIMES, set())["due"], None)

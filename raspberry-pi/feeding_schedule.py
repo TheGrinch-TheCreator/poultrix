@@ -5,7 +5,10 @@ Pure logic, no hardware imports, unit-tested on a dev machine
 readings, the gates and the Arduino.
 
 Rules (owner decisions 2026-11-08):
-- dispense = session target - trough weight, never below 0;
+- ACTIVE (rough-check mode, session_plan): full target each session; skip only
+  if a valid trough reading > target + 100 g; an unreadable trough still feeds.
+- PRECISE mode (session_need, for when the trough scale is fixed):
+  dispense = session target - trough weight, never below 0;
 - skip if the trough is at/above target, or less than MIN_DISPENSE_GRAMS is needed;
 - at most MAX_DISPENSE_SECONDS of gate time per session (dispense the cap, flag partial);
 - an invalid trough reading means skip (never guess);
@@ -35,6 +38,9 @@ TROUGH_MAX_STDEV_GRAMS = 25.0
 TROUGH_NEGATIVE_LIMIT_GRAMS = -25.0
 MIN_DISPENSE_GRAMS = 20.0
 MAX_DISPENSE_SECONDS = 10.0
+# Rough-check mode: skip only when a valid trough reading exceeds target + this.
+# Larger than the 50-80 g zero drift measured on 2026-11-08.
+FULL_MARGIN_GRAMS = 100.0
 LATE_WINDOW = timedelta(minutes=15)
 FAULT_LIMIT = 3
 KEEP_DAYS = 7
@@ -89,6 +95,33 @@ def session_need(target, trough, rate):
         need = seconds * rate
     return {"action": "dispense", "grams": round(need, 1), "seconds": round(seconds, 3),
             "partial": partial, "reason": "cap_reached" if partial else None}
+
+
+def session_plan(target, reading, rate):
+    """Rough-check mode (owner 2026-11-08, while the trough scale drifts):
+    dispense the full target (10 s cap) unless a VALID trough reading shows
+    more than target + FULL_MARGIN_GRAMS. An unreadable trough still feeds.
+    `reading` is a trough_valid() result (or None).
+    Returns {action, grams, seconds, partial, reason, troughReadable}."""
+    readable = bool(reading and reading.get("valid"))
+    def skip(reason):
+        return {"action": "skip", "grams": 0, "seconds": 0, "partial": False,
+                "reason": reason, "troughReadable": readable}
+    if not _number(target) or target <= 0:
+        return skip("no_target")
+    if not _number(rate) or rate <= 0:
+        return skip("bad_rate")
+    if readable and _number(reading.get("grams")) and reading["grams"] > target + FULL_MARGIN_GRAMS:
+        return skip("trough_full")
+    grams = float(target)
+    seconds = grams / rate
+    partial = seconds > MAX_DISPENSE_SECONDS
+    if partial:
+        seconds = MAX_DISPENSE_SECONDS
+        grams = seconds * rate
+    reasons = [r for r in ("cap_reached" if partial else None, None if readable else "trough_unreadable") if r]
+    return {"action": "dispense", "grams": round(grams, 1), "seconds": round(seconds, 3), "partial": partial,
+            "reason": ",".join(reasons) or None, "troughReadable": readable}
 
 
 def _slots(times):
