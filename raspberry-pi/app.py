@@ -1061,25 +1061,93 @@ def initialize_camera():
 # CAMERA LIVE STREAM
 # ============================================================
 
+# The farm upload is about 1 Mbit/s (measured 2026-11-09). The old stream sent
+# 1280x720 frames (~177 KB, ~15 Mbit/s), so frames queued up and the live view
+# fell further and further behind. Now ONE producer thread makes small frames
+# (~25-35 KB) a few times a second while someone watches; every viewer gets the
+# NEWEST frame (never a queue). The AI still captures full-size frames itself.
+STREAM_WIDTH = 640
+STREAM_HEIGHT = 360
+STREAM_FPS = 3
+STREAM_JPEG_QUALITY = 60
+STREAM_IDLE_SECONDS = 10  # producer stops this long after the last viewer left
+
+stream_condition = threading.Condition()
+stream_frame = None       # latest JPEG bytes
+stream_frame_seq = 0      # increments with every new frame
+stream_viewers = 0
+stream_last_viewer = 0.0  # monotonic time a viewer was last connected
+stream_producer_running = False
+
+
+def encode_stream_frame(image):
+    """Downscale a PIL image and encode it as a small JPEG."""
+    small = image.convert("RGB").resize((STREAM_WIDTH, STREAM_HEIGHT))
+    buffer = io.BytesIO()
+    small.save(buffer, format="JPEG", quality=STREAM_JPEG_QUALITY, optimize=True)
+    return buffer.getvalue()
+
+
+def stream_producer():
+    global stream_frame, stream_frame_seq, stream_producer_running
+    print("[CAMERA] stream producer started", flush=True)
+    try:
+        while camera is not None:
+            with stream_condition:
+                idle = stream_viewers == 0 and time.monotonic() - stream_last_viewer > STREAM_IDLE_SECONDS
+            if idle:
+                break
+            started = time.monotonic()
+            try:
+                with camera_lock:  # held only for the capture, not the encoding
+                    image = camera.capture_image("main")
+                frame = encode_stream_frame(image)
+                with stream_condition:
+                    stream_frame = frame
+                    stream_frame_seq += 1
+                    stream_condition.notify_all()
+            except Exception as error:
+                camera_state["error"] = str(error)
+                print(f"[CAMERA] Streaming error: {error}", flush=True)
+                time.sleep(1)
+            time.sleep(max(0.0, 1 / STREAM_FPS - (time.monotonic() - started)))
+    finally:
+        with stream_condition:
+            stream_producer_running = False
+            stream_condition.notify_all()
+        print("[CAMERA] stream producer stopped", flush=True)
+
+
+def _ensure_stream_producer():
+    global stream_producer_running
+    with stream_condition:
+        if stream_producer_running:
+            return
+        stream_producer_running = True
+    threading.Thread(target=stream_producer, name="camera-stream", daemon=True).start()
+
+
 def generate_camera_frames():
-
-    while camera is not None:
-
-        try:
-
-            with camera_lock:
-
-                buffer = io.BytesIO()
-
-                camera.capture_file(
-                    buffer,
-                    format="jpeg"
-                )
-
-                frame = (
-                    buffer.getvalue()
-                )
-
+    global stream_viewers, stream_last_viewer
+    with stream_condition:
+        stream_viewers += 1
+        stream_last_viewer = time.monotonic()
+    _ensure_stream_producer()
+    seen = -1
+    try:
+        while camera is not None:
+            with stream_condition:
+                # Wait for a frame newer than the one this viewer last got.
+                stream_condition.wait_for(lambda: stream_frame_seq != seen or not stream_producer_running, timeout=5)
+                stream_last_viewer = time.monotonic()
+                frame, seq = stream_frame, stream_frame_seq
+            if not stream_producer_running:
+                _ensure_stream_producer()  # e.g. it stopped just as this viewer joined
+            if frame is None or seq == seen:
+                continue
+            seen = seq
+            # Blocks while the network is slow; afterwards the viewer jumps to the
+            # newest frame, so a slow link drops frames instead of adding delay.
             yield (
                 b"--frame\r\n"
                 b"Content-Type: image/jpeg\r\n"
@@ -1088,27 +1156,10 @@ def generate_camera_frames():
                 + frame
                 + b"\r\n"
             )
-
-            time.sleep(
-                1 / CAMERA_FPS
-            )
-
-        except GeneratorExit:
-            break
-
-        except Exception as error:
-
-            camera_state["error"] = (
-                str(error)
-            )
-
-            print(
-                "[CAMERA] "
-                f"Streaming error: "
-                f"{error}"
-            )
-
-            break
+    finally:
+        with stream_condition:
+            stream_viewers -= 1
+            stream_last_viewer = time.monotonic()
 
 
 # ============================================================
