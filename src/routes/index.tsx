@@ -130,9 +130,9 @@ function Dashboard() {
         <Card>
           <CardTitle icon={<Cpu className="h-4 w-4" />} right={<Link to="/environment" className="text-xs font-semibold text-primary">Environment →</Link>}>Devices</CardTitle>
           <div className="grid grid-cols-3 gap-2">
-            <Device icon={<Fan className="h-5 w-5" />} label="Fans" value={connected ? `${hw?.fansOn ?? 0}/4 ON` : "—"} />
-            <Device icon={<Flame className="h-5 w-5" />} label="Heat" value={connected ? `${(hw?.heatersOn ?? 0) > 0 ? 1 : 0}/1 relay ON` : "—"} />
-            <Device icon={<Lightbulb className="h-5 w-5" />} label="Light" value={connected ? hw?.led ? "ON" : "OFF" : "—"} />
+            <Device on={connected && (hw?.fansOn ?? 0) > 0} icon={<Fan className="h-5 w-5" />} label="Fans" value={connected ? `${hw?.fansOn ?? 0}/4 ON` : "—"} />
+            <Device on={connected && (hw?.heatersOn ?? 0) > 0} icon={<Flame className="h-5 w-5" />} label="Heat" value={connected ? `${(hw?.heatersOn ?? 0) > 0 ? 1 : 0}/1 relay ON` : "—"} />
+            <Device on={connected && !!hw?.led} icon={<Lightbulb className="h-5 w-5" />} label="Light" value={connected ? hw?.led ? "ON" : "OFF" : "—"} />
           </div>
           <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground"><Camera className="h-4 w-4" /> Camera: {hw?.camera?.connected ? "Connected" : "Unavailable"}</div>
           <p className="mt-3 text-xs text-muted-foreground">Device states are Arduino-reported commands, not independent electrical feedback.</p>
@@ -165,8 +165,31 @@ function formatDate(value?: string | null) {
 function Stat({ label, value, icon }: { label: string; value: string; icon?: React.ReactNode }) {
   return <div className="rounded-xl bg-surface p-3"><div className="flex items-center gap-1.5 text-xs text-muted-foreground">{icon}{label}</div><div className="mt-1 break-words text-lg font-bold">{value}</div></div>;
 }
-function Device({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
-  return <div className="rounded-xl border bg-surface p-3 text-center"><div className="flex justify-center">{icon}</div><div className="mt-1 text-xs font-semibold">{label}</div><div className="mt-1 text-xs text-muted-foreground">{value}</div></div>;
+/** Green icon and tile while the Arduino reports the device on. */
+function Device({
+  icon,
+  label,
+  value,
+  on,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  on: boolean;
+}) {
+  return (
+    <div
+      className={`rounded-xl border p-3 text-center transition-colors ${on ? "border-ok/40 bg-ok-soft" : "bg-surface"}`}
+    >
+      <div className={`flex justify-center ${on ? "text-ok" : "text-muted-foreground"}`}>
+        {icon}
+      </div>
+      <div className="mt-1 text-xs font-semibold">{label}</div>
+      <div className={`mt-1 text-xs ${on ? "font-semibold text-ok" : "text-muted-foreground"}`}>
+        {value}
+      </div>
+    </div>
+  );
 }
 
 /** Finds the next configured HH:mm slot in the browser's local time zone. */
