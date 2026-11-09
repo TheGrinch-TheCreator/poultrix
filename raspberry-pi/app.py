@@ -533,9 +533,14 @@ def parse_bool_list(value, count):
     return result
 
 
-# A missed HX711 report (NOT_READY) keeps the last good value this long
-# (the hopper misses about 10 % of reports, likely wiring; 2026-11-08).
-WEIGHT_HOLD_SECONDS = 6.0
+# A missed HX711 report (NOT_READY) keeps the last good value this long.
+# Hopper: 5 min (stopgap, owner 2026-11-09). Its HX711 stops converting when
+# the air is humid (>= 90 % RH: 53-65 % of reports missed, gaps up to 158 s;
+# below 85 %: 0-2 %), likely moisture on the board or connectors. The hopper
+# changes slowly, so the dashboard keeps the last real reading with its time
+# instead of "not ready". `missedReadings` > 0 means the value is being held.
+# The trough feeds the automatic-feeding checks, so it keeps the short hold.
+WEIGHT_HOLD_SECONDS = {"hopperWeight": 300.0, "troughWeight": 6.0}
 weight_last_good = {}
 
 
@@ -566,7 +571,7 @@ def process_message(message):
                     current["missedReadings"] = 0
                     weight_last_good[sensor] = time.monotonic()
                 elif (parts[0] == "NOT_READY" and current.get("raw") is not None
-                      and time.monotonic() - weight_last_good.get(sensor, 0) <= WEIGHT_HOLD_SECONDS):
+                      and time.monotonic() - weight_last_good.get(sensor, 0) <= WEIGHT_HOLD_SECONDS[sensor]):
                     # The load cell missed one report: keep the last good value
                     # for a few seconds instead of flickering to "not ready".
                     current["missedReadings"] = int(current.get("missedReadings") or 0) + 1

@@ -6,6 +6,8 @@ export type WeightReading = {
   weightGrams?: number | null;
   weightKg?: number | null;
   updatedAt?: string | null;
+  /** Missed reports since the last good one; the Pi keeps that value meanwhile. */
+  missedReadings?: number;
 };
 export type WeightPayload = WeightReading & {
   hopper?: WeightReading | null;
@@ -25,6 +27,9 @@ export function readingStatus(reading?: WeightReading | null): string {
   if (!reading) return "Not reported";
   if (reading.connected === false) return "Disconnected";
   if (grams(reading) === null) return reading.status || "No valid reading";
+  // The Pi holds the last real reading while the scale misses reports.
+  if ((reading.missedReadings ?? 0) > 0)
+    return "Last reading kept · scale not responding right now";
   return reading.estimated ? "Estimated · Arduino calibrated" : "Arduino reported";
 }
 export function formatReadingTime(reading?: WeightReading | null): string {
