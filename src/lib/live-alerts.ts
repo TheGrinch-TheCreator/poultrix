@@ -97,6 +97,20 @@ function deriveAlerts(s: Snapshot | null): LiveAlert[] {
       `Day ${schedule.batchDay}: ${stage} has not been confirmed for ${schedule.overdueDays} day${schedule.overdueDays === 1 ? "" : "s"}.${seen}`,
       "Check the camera view and lighting. The Pi tries again at the next daily check.");
   }
+  // Observe-only pre-check (SPEC-stage-schedule §10): the Pi reports that the flock
+  // looks ready for the next stage. No confidence or detection is shown here.
+  const ready = schedule?.readyAlert;
+  if (ready && typeof ready.stage === "string") {
+    const stage = ready.stage.charAt(0) + ready.stage.slice(1).toLowerCase();
+    add(
+      out,
+      `stage-ready-${ready.stage}-${ready.date}`,
+      "info",
+      `Flock looks ready for ${stage}`,
+      `Flock looks ready for ${stage}; the stage can change from Day ${ready.fromDay}.`,
+      `No action needed: the AI confirms ${stage} at its daily check from Day ${ready.fromDay}.`,
+    );
+  }
   // Automatic feeding (SPEC-auto-feeding): last session outcome and the switch.
   const auto = s.feeding?.automatic as { enabled?: boolean; disabledReason?: string | null; last?: FeedingSessionRecord | null } | undefined;
   if (auto?.disabledReason === "3_consecutive_faults" && !auto.enabled)

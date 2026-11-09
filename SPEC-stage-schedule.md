@@ -1,6 +1,6 @@
 # Spec: stage-schedule
 
-Status: **APPROVED 2026-11-08** (owner: Q1 yes, Q2 yes, Q3 yes, Q4 yes, Q5 → also in Alerts). Plan and tasks: `tasks/todo-stage-schedule.md`. Module `stage-schedule` in `CAPABILITY_MAP.md` (no dependencies; `auto-feeding` depends on it).
+Status: addendum §10 (thesis-panel schedule, observe-only pre-checks) **APPROVED 2026-11-09** (owner: decisions 1–5 yes), implemented the same day. Base spec **APPROVED 2026-11-08** (owner: Q1 yes, Q2 yes, Q3 yes, Q4 yes, Q5 → also in Alerts). Plan and tasks: `tasks/todo-stage-schedule.md`. Module `stage-schedule` in `CAPABILITY_MAP.md` (no dependencies; `auto-feeding` depends on it).
 
 ## Objective
 Make the **batch day decide when the AI analyses the flock and which stage it may confirm**. The AI still makes the confirmation.
@@ -156,6 +156,74 @@ Design:
   - gateway tests for the new route and header rules;
   - offline harness: manual any-direction, refused while dispensing, AI fields untouched, no `simulation` / `maintenanceActive` / overlays without a token.
 
+### 10. Thesis-panel schedule: observe-only pre-checks (addendum, APPROVED 2026-11-09)
+Why: the thesis panel rejected checking every 5 minutes and then a fixed 11-day interval. With an 11-day interval the check days are Days 1, 12, 23 and 34, so a flock that becomes Finisher on Day 25 would be detected only on Day 34, nine days late. The approved design checks **daily, but only around the transitions**, and adds a **one-day observe-only pre-check** before each gate. The pre-check warns the farmer early without letting the AI change the stage before the gate.
+
+**Final schedule** (Day 1 = batch start date; every check starts at 10:00 Asia/Manila):
+
+| Batch day / state | What the Pi does | Can the stage change? |
+|---|---|---|
+| Days 1–9 (Starter) | No scheduled checks | No |
+| Day 10 (Starter) | **Grower pre-check:** one daily check, observe only. Readings go to the AI history. If they show Grower with confidence, alert "Flock looks ready for Grower; the stage can change from Day 11" | **No** |
+| Day 11 until Grower is confirmed | One daily check; repeated every day, no cap; overdue alert from the first failed day | Yes, to Grower (3 consecutive confident cycles) |
+| Grower confirmed until Day 23 | No scheduled checks | No |
+| Day 24 (Grower) | **Finisher pre-check:** as Day 10, alert "Flock looks ready for Finisher; the stage can change from Day 25" | **No** |
+| Day 25 until Finisher is confirmed | One daily check; repeated daily, no cap; overdue alert | Yes, to Finisher |
+| Finisher confirmed | No more scheduled checks for the batch | No |
+
+Unchanged:
+- A daily check, **including a pre-check**, runs up to 6 cycles, 5 min apart, and may only *start* between 10:00 and 11:00.
+- A change needs 3 consecutive confident cycles that agree.
+- Forward only. Analyze now, maintenance analyses and pre-checks **never** change the stage; only the owner's manual "Confirm real stage" can (§9).
+- Display rules (§9): the main app shows only AI detections that agree with the confirmed stage. A pre-check reading of the next stage is **not** shown as a detection. The farmer learns about it only through the "looks ready" alert, which names no confidence. Nothing is fabricated or altered.
+
+**Constants.** Every schedule value is a named constant in `raspberry-pi/stage_schedule.py`, and only there, so changing an interval touches one place:
+
+| Constant | Value |
+|---|---|
+| `GROWER_FROM_DAY` | 11 |
+| `FINISHER_FROM_DAY` | 25 |
+| `PRE_CHECK_DAYS_BEFORE` | 1 (pre-checks on days 10 and 24) |
+| `DAILY_CHECK_TIME` | 10:00 |
+| `DAILY_START_LATEST` | 11:00 |
+| `DAILY_MAX_CYCLES` | 6 |
+| `CYCLE_SPACING_SECONDS` | 300 |
+| `CONFIRMATIONS_REQUIRED` | 3 |
+
+`app.py` uses them as `AI_INTERVAL_SECONDS` and `AI_TRANSITION_CONFIRMATIONS_REQUIRED` aliases. They were already moved there on 2026-11-09, with no behavior change and 23/23 tests passing. The frontend shows them from the API.
+
+**Design:**
+- **`stage_schedule.py`:**
+  - `pre_check_target(day, current)` returns `"GROWER"` for a Starter flock, or `"FINISHER"` for a Grower flock, on the `PRE_CHECK_DAYS_BEFORE` days before that stage's gate (with 1: days 10 and 24). Otherwise it returns `None`. Setting the constant to `0` turns pre-checks off.
+  - `window_due()` is also true on a pre-check day, with the same time and attempt rules.
+  - `allowed_targets()` is **unchanged**: it is empty on days 10 and 24, so the existing transition rule cannot apply a stage there.
+- **Attempt record** (`stage_schedule.json`):
+  - A pre-check attempt has `kind: "pre_check"` and `preCheckStage`; a normal attempt has `kind: "check"`.
+  - `record_cycle()` counts `readyStreak`: consecutive confident cycles of the pre-check stage.
+  - When the streak reaches `CONFIRMATIONS_REQUIRED`, the pre-check ends with `result: "looks_ready"`, the same bar as a real change and no further cycles. Otherwise it ends `not_ready` after 6 cycles. A pre-check never sets `confirmed`.
+- **`app.py`:**
+  - `run_scheduled_check()` passes the cycle's `confident` flag to `record_cycle()`.
+  - In a pre-check, `evaluate_stage_transition()` sees no allowed target, so it reports `not_allowed_yet`, resets the candidate, and calls no apply.
+  - Every cycle is already written to the `ai_checks` history table.
+- **API** (`schedule` in `/api/ai/status` and `/api/snapshot`; no new routes, gateway unchanged):
+  - new phases `grower_pre_check` and `finisher_pre_check`;
+  - `preCheckDays: {GROWER: 10, FINISHER: 24}` (`{}` when pre-checks are off), `preCheckStage` (today's pre-check stage or null), and `confirmationsRequired`;
+  - `nextCheckAt` now points to the pre-check day (Day 10 / Day 24, 10:00) instead of the gate day;
+  - `readyAlert: {stage, date, fromDay} | null`, set while the latest pre-check ended `looks_ready` and the stage hasn't changed since. It carries no confidence.
+  - `overdueDays` is unchanged; a pre-check never counts as overdue.
+- **Frontend** (shows Pi values, recomputes nothing):
+  - `live-alerts.ts` adds an info alert "Flock looks ready for <Stage>" with the text "The stage can change from Day <fromDay>." Its id is `stage-ready-<STAGE>-<date>`.
+  - `StageSchedule.tsx` gets phase texts for the two pre-check phases, and its timeline note mentions the pre-check days from `preCheckDays`.
+  - The `StageSchedule` type gets the new fields.
+  - The dashboard countdown needs no change: it already counts down to `nextCheckAt`.
+
+**Edge cases (proposed):**
+- **Still Starter on Day 24** (a late Grower): the normal daily Grower check runs and may confirm Grower. A confident Finisher reading still counts as `not_allowed_yet`. There is no separate Finisher pre-check that day.
+- **Still Starter on Day ≥ 25:** unchanged (decision 3); the AI may confirm Grower or Finisher.
+- **Grower confirmed late, after Day 24** (e.g. on Day 26): there is no Finisher pre-check, because the Finisher window is already open; checks continue daily from the next day.
+- **Grower set by hand before Day 24:** the Day 24 pre-check runs normally.
+- **"Start new batch" on Day 10:** the pre-check starts right away, like the normal burst on day ≥ 11. On Day 24 a new batch is Starter, so the normal Grower check starts instead (decision 2). On days 1–9 it stays a camera check only.
+
 ## Commands
 ```
 python -m unittest discover -s tests/stage-schedule -v   # pure schedule logic (dev machine)
@@ -221,7 +289,18 @@ Follow the existing files. Python uses small functions, uppercase module constan
 9. The Flock page shows Day N, phase, next check and overdue notice from real API data, and an overdue stage check also appears in Alerts. Snapshot polling stays at 5 s with no new poll.
 10. Unit tests, `npm run build`, `npm run lint` and `npm run test:gateway` pass. AGENTS.md and CLAUDE.md state the new rule.
 
+## Success criteria for §10 (pre-checks)
+11. Days 1–9: `window_due` is never true, and `nextCheckAt` is Day 10 at 10:00.
+12. Day 10 and Day 24: one pre-check window runs (up to 6 cycles). Even 3+ confident next-stage cycles **never** change the stage. The "looks ready" alert (`readyAlert`) appears only after 3 consecutive confident next-stage cycles; low-confidence or other readings give no alert.
+13. Grower can switch only from Day 11, and Finisher only from Day 25.
+14. Between Grower confirmed and Day 23 nothing runs, and `nextCheckAt` is Day 24 at 10:00.
+15. A late flock is re-checked daily (Days 12, 13, … and 26, 27, …), with the overdue alert.
+16. After Finisher is confirmed nothing runs, and `nextCheckAt` is null.
+17. Analyze now never changes the stage.
+18. Tests: `npm run test:stage-schedule` (new cases for 11–17); `npm run test:auto-feeding`, `npm run build` and `npm run lint` pass (no new TypeScript errors).
+
 ## Decisions (owner, 2026-11-08)
+8. **(2026-11-09) Thesis-panel schedule (§10):** observe-only pre-checks on Day 10 and Day 24. Decision 1: the "looks ready" alert needs 3 consecutive confident next-stage cycles, and the pre-check then ends. Decision 2: a flock still Starter on Day 24 gets only its Grower check. Decision 3: no Finisher pre-check when Grower is confirmed after Day 24. Decision 4: Start new batch on a pre-check day starts the pre-check. Decision 5: the alert names no confidence.
 1. Analyze now is a camera check only; it never changes the stage.
 2. Daily check at 10:00 Asia/Manila, up to 6 cycles (30 min), once a day.
 3. Still Starter on day ≥ 25: the AI may confirm Grower or Finisher, whichever it sees with confidence.

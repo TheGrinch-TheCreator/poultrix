@@ -76,7 +76,7 @@ class Window(unittest.TestCase):
         self.assertFalse(ss.window_due(at(day_n(11), 23, 0), START, "STARTER", None))
 
     def test_not_on_days_without_targets(self):
-        self.assertFalse(ss.window_due(at(day_n(10), 11), START, "STARTER", None))
+        self.assertFalse(ss.window_due(at(day_n(9), 10, 30), START, "STARTER", None))
         self.assertFalse(ss.window_due(at(day_n(20), 11), START, "GROWER", None))
         self.assertFalse(ss.window_due(at(day_n(40), 11), START, "FINISHER", None))
         self.assertFalse(ss.window_due(at(day_n(20), 11), None, "STARTER", None))
@@ -176,7 +176,8 @@ class Status(unittest.TestCase):
     def test_starter_period(self):
         s = ss.schedule_status("2026-11-01", "STARTER", at(day_n(5)), None)
         self.assertEqual((s["phase"], s["batchDay"], s["allowedTargets"]), ("starter", 5, []))
-        self.assertEqual(s["nextCheckAt"], at(day_n(11), 10).isoformat())
+        # Spec §10: the first scheduled check is the Day 10 pre-check.
+        self.assertEqual(s["nextCheckAt"], at(day_n(10), 10).isoformat())
         self.assertEqual(s["fromDay"], {"STARTER": 1, "GROWER": 11, "FINISHER": 25})
 
     def test_grower_check_and_overdue(self):
@@ -204,7 +205,8 @@ class Status(unittest.TestCase):
     def test_grower_waits_for_day_25(self):
         s = ss.schedule_status(START, "GROWER", at(day_n(15)), None)
         self.assertEqual((s["phase"], s["allowedTargets"], s["overdueDays"]), ("grower", [], 0))
-        self.assertEqual(s["nextCheckAt"], at(day_n(25), 10).isoformat())
+        # Spec §10: the next scheduled check is the Day 24 Finisher pre-check.
+        self.assertEqual(s["nextCheckAt"], at(day_n(24), 10).isoformat())
         s = ss.schedule_status(START, "GROWER", at(day_n(27), 11), None)
         self.assertEqual((s["phase"], s["overdueDays"], s["overdueStage"]), ("finisher_check", 2, "FINISHER"))
 
@@ -226,6 +228,196 @@ class Status(unittest.TestCase):
         self.assertEqual(s["lastAttempt"]["date"], day_n(11).isoformat())
         # A window that was still "running" on an earlier day (Pi restart) does not count as open today.
         self.assertFalse(s["windowOpen"])
+
+
+# ---------------------------------------------------------------------------
+# Spec §10 (thesis-panel schedule, approved 2026-11-09): daily checks only
+# around the transitions, with a one-day observe-only pre-check before each gate.
+# ---------------------------------------------------------------------------
+def run_window(day, current, readings, pre_check=None, applied_on=None):
+    """Run one daily window (10:00, every 5 min) with (stage, confidence, confident)
+    readings until it finishes. Returns (attempt, cycles_run)."""
+    attempt, ran = None, 0
+    for i, (stage, conf, confident) in enumerate(readings):
+        moment = at(day_n(day), 10, 5 * i)
+        if not ss.window_due(moment, START, current, attempt):
+            break
+        attempt = ss.record_cycle(attempt, moment, stage, conf, applied=(applied_on == i),
+                                  confident=confident, pre_check=pre_check)
+        ran += 1
+    return attempt, ran
+
+
+CONFIDENT_GROWER = [("GROWER", 90.0, True)] * 10
+
+
+class NoChecksDays1To9(unittest.TestCase):
+    def test_days_1_to_9_never_due(self):
+        for day in range(1, 10):
+            for hh, mm in ((10, 0), (10, 30), (10, 59)):
+                self.assertFalse(ss.window_due(at(day_n(day), hh, mm), START, "STARTER", None), day)
+            self.assertIsNone(ss.pre_check_target(day, "STARTER"))
+            self.assertEqual(ss.allowed_targets(day, "STARTER"), ())
+
+
+class PreCheck(unittest.TestCase):
+    def test_pre_check_days(self):
+        self.assertEqual(ss.pre_check_target(10, "STARTER"), "GROWER")
+        self.assertEqual(ss.pre_check_target(24, "GROWER"), "FINISHER")
+        for day, stage in ((9, "STARTER"), (11, "STARTER"), (23, "GROWER"), (25, "GROWER"),
+                           (24, "STARTER"), (24, "FINISHER"), (10, "GROWER"), (10, None)):
+            self.assertIsNone(ss.pre_check_target(day, stage), (day, stage))
+        # The stage can't be changed on a pre-check day.
+        self.assertEqual(ss.allowed_targets(10, "STARTER"), ())
+        self.assertEqual(ss.allowed_targets(24, "GROWER"), ())
+
+    def test_day_10_runs_a_window(self):
+        self.assertFalse(ss.window_due(at(day_n(10), 9, 59), START, "STARTER", None))
+        self.assertTrue(ss.window_due(at(day_n(10), 10), START, "STARTER", None))
+        self.assertFalse(ss.window_due(at(day_n(10), 11), START, "STARTER", None))
+        s = ss.schedule_status(START, "STARTER", at(day_n(10), 8), None)
+        self.assertEqual((s["phase"], s["preCheckStage"], s["allowedTargets"]), ("grower_pre_check", "GROWER", []))
+        self.assertEqual(s["nextCheckAt"], at(day_n(10), 10).isoformat())
+        self.assertEqual(s["preCheckDays"], {"GROWER": 10, "FINISHER": 24})
+
+    def _assert_observe_only(self, day, current, target):
+        readings = [(target, 95.0, True)] * 10
+        # Even if the caller wrongly reported an apply, a pre-check never ends "confirmed".
+        attempt, ran = run_window(day, current, readings, pre_check=target, applied_on=0)
+        self.assertEqual(attempt["kind"], "pre_check")
+        self.assertEqual(attempt["result"], "looks_ready")
+        self.assertEqual(ran, ss.CONFIRMATIONS_REQUIRED)  # ends early, like a confirmation
+        self.assertIsNone(attempt["target"])
+        self.assertNotEqual(attempt["result"], "confirmed")
+        s = ss.schedule_status(START, current, at(day_n(day), 11), attempt)
+        self.assertEqual(s["currentStage"], current)  # the stage did not move
+        self.assertEqual(s["readyAlert"], {"stage": target, "date": day_n(day).isoformat(),
+                                           "fromDay": ss.FROM_DAY[target]})
+        self.assertNotIn("confidence", s["readyAlert"])  # no next-stage reading on the main app
+        self.assertEqual(s["overdueDays"], 0)
+        # Done for the day; the next check is the gate day at 10:00.
+        self.assertFalse(ss.window_due(at(day_n(day), 10, 30), START, current, attempt))
+        self.assertEqual(s["nextCheckAt"], at(day_n(day + 1), 10).isoformat())
+
+    def test_day_10_never_changes_stage(self):
+        self._assert_observe_only(10, "STARTER", "GROWER")
+
+    def test_day_24_never_changes_stage(self):
+        self._assert_observe_only(24, "GROWER", "FINISHER")
+
+    def test_no_alert_without_confident_readings(self):
+        cases = {
+            "low confidence": [("GROWER", 55.0, False)] * 6,
+            "current stage": [("STARTER", 90.0, True)] * 6,
+            "not consecutive": [("GROWER", 90.0, True), ("GROWER", 90.0, True), ("STARTER", 90.0, True)] * 2,
+            "no reading": [(None, None, False)] * 6,
+        }
+        for name, readings in cases.items():
+            attempt, ran = run_window(10, "STARTER", readings, pre_check="GROWER")
+            self.assertEqual((attempt["result"], ran), ("not_ready", ss.DAILY_MAX_CYCLES), name)
+            s = ss.schedule_status(START, "STARTER", at(day_n(10), 11), attempt)
+            self.assertIsNone(s["readyAlert"], name)
+
+    def test_alert_clears_when_stage_changes(self):
+        attempt, _ = run_window(10, "STARTER", CONFIDENT_GROWER, pre_check="GROWER")
+        s = ss.schedule_status(START, "GROWER", at(day_n(10), 12), attempt)  # set by hand
+        self.assertIsNone(s["readyAlert"])
+        # Day 11's real check replaces the pre-check attempt.
+        check, _ = run_window(11, "STARTER", [("STARTER", 70.0, True)])
+        s = ss.schedule_status(START, "STARTER", at(day_n(11), 10, 1), check)
+        self.assertIsNone(s["readyAlert"])
+        self.assertEqual(check["kind"], "check")
+
+    def test_still_starter_on_day_24_gets_grower_check(self):
+        # Owner decision 2: no Finisher pre-check for a late Starter flock.
+        self.assertIsNone(ss.pre_check_target(24, "STARTER"))
+        s = ss.schedule_status(START, "STARTER", at(day_n(24), 8), None)
+        self.assertEqual((s["phase"], s["allowedTargets"], s["preCheckStage"]), ("grower_check", ["GROWER"], None))
+
+    def test_grower_confirmed_after_day_24_has_no_pre_check(self):
+        # Owner decision 3.
+        self.assertIsNone(ss.pre_check_target(26, "GROWER"))
+        s = ss.schedule_status(START, "GROWER", at(day_n(26), 8), None)
+        self.assertEqual((s["phase"], s["allowedTargets"]), ("finisher_check", ["FINISHER"]))
+
+    def test_pre_checks_can_be_turned_off(self):
+        old = ss.PRE_CHECK_DAYS_BEFORE
+        try:
+            ss.PRE_CHECK_DAYS_BEFORE = 0
+            self.assertIsNone(ss.pre_check_target(10, "STARTER"))
+            self.assertFalse(ss.window_due(at(day_n(10), 10), START, "STARTER", None))
+            s = ss.schedule_status(START, "STARTER", at(day_n(5)), None)
+            self.assertEqual(s["nextCheckAt"], at(day_n(11), 10).isoformat())
+            self.assertEqual(s["preCheckDays"], {})
+        finally:
+            ss.PRE_CHECK_DAYS_BEFORE = old
+
+
+class GateDays(unittest.TestCase):
+    def test_grower_only_from_day_11(self):
+        for day in range(1, 11):
+            self.assertNotIn("GROWER", ss.allowed_targets(day, "STARTER"), day)
+        self.assertEqual(ss.allowed_targets(11, "STARTER"), ("GROWER",))
+        attempt, ran = run_window(11, "STARTER", CONFIDENT_GROWER, applied_on=2)
+        self.assertEqual((attempt["result"], attempt["target"], ran), ("confirmed", "GROWER", 3))
+
+    def test_finisher_only_from_day_25(self):
+        for day in range(11, 25):
+            self.assertNotIn("FINISHER", ss.allowed_targets(day, "GROWER"), day)
+        self.assertEqual(ss.allowed_targets(25, "GROWER"), ("FINISHER",))
+
+
+class QuietPeriods(unittest.TestCase):
+    def test_no_checks_between_grower_and_day_23(self):
+        for day in range(11, 24):
+            for hh, mm in ((10, 0), (10, 30)):
+                self.assertFalse(ss.window_due(at(day_n(day), hh, mm), START, "GROWER", None), day)
+            s = ss.schedule_status(START, "GROWER", at(day_n(day), 8), None)
+            self.assertEqual(s["nextCheckAt"], at(day_n(24), 10).isoformat(), day)
+        self.assertTrue(ss.window_due(at(day_n(24), 10), START, "GROWER", None))
+
+    def test_no_checks_after_finisher(self):
+        for day in range(25, 50):
+            self.assertFalse(ss.window_due(at(day_n(day), 10), START, "FINISHER", None), day)
+            s = ss.schedule_status(START, "FINISHER", at(day_n(day), 8), None)
+            self.assertEqual((s["phase"], s["nextCheckAt"], s["readyAlert"]), ("complete", None, None))
+
+
+class LateFlock(unittest.TestCase):
+    def _late(self, current, first_day, stage):
+        attempt = None
+        for offset in range(4):  # Days N, N+1, N+2, N+3: re-checked every day, no cap
+            day = first_day + offset
+            self.assertTrue(ss.window_due(at(day_n(day), 10), START, current, attempt), day)
+            attempt, ran = run_window(day, current, [(current, 70.0, True)] * 10)
+            self.assertEqual((attempt["result"], ran), ("not_confirmed", ss.DAILY_MAX_CYCLES))
+            s = ss.schedule_status(START, current, at(day_n(day), 12), attempt)
+            self.assertEqual((s["overdueStage"], s["overdueDays"]), (stage, offset + 1))
+            self.assertEqual(s["nextCheckAt"], at(day_n(day + 1), 10).isoformat())
+
+    def test_late_grower_rechecked_daily(self):
+        self._late("STARTER", 11, "GROWER")  # Days 11, 12, 13, 14
+
+    def test_late_finisher_rechecked_daily(self):
+        self._late("GROWER", 25, "FINISHER")  # Days 25, 26, 27, 28
+
+
+class Countdown(unittest.TestCase):
+    """The dashboard counts down to `nextCheckAt` (it never recomputes it)."""
+
+    def test_next_check_follows_the_schedule(self):
+        cases = [
+            ("STARTER", 1, 8, 10),   # Days 1-9 -> Day 10 pre-check
+            ("STARTER", 9, 23, 10),
+            ("STARTER", 10, 9, 10),  # Day 10 before 10:00 -> today
+            ("STARTER", 10, 12, 11),  # Day 10 after 11:00, no pre-check ran -> Day 11
+            ("GROWER", 12, 8, 24),   # Grower -> Day 24 pre-check
+            ("GROWER", 24, 9, 24),
+            ("GROWER", 24, 12, 25),
+        ]
+        for stage, day, hh, expected in cases:
+            s = ss.schedule_status(START, stage, at(day_n(day), hh), None)
+            self.assertEqual(s["nextCheckAt"], at(day_n(expected), 10).isoformat(), (stage, day, hh))
 
 
 if __name__ == "__main__":

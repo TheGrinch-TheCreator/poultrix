@@ -55,9 +55,9 @@ CAMERA_FPS = 15
 
 AI_MODEL_PATH = "best.pt"
 
-# Inside the daily stage-check window, run a cycle every 5 minutes
-# (stage_schedule.py: 10:00 Manila, at most 6 cycles, day-gated).
-AI_INTERVAL_SECONDS = 300
+# Inside the daily stage-check window, run a cycle every 5 minutes.
+# The value lives in stage_schedule.py with the other schedule values.
+AI_INTERVAL_SECONDS = stage_schedule.CYCLE_SPACING_SECONDS
 # How often the AI worker checks whether the daily window is due.
 AI_SCHEDULE_POLL_SECONDS = 30
 STAGE_SCHEDULE_PATH = Path(__file__).with_name("stage_schedule.json")
@@ -71,7 +71,7 @@ AI_SAMPLE_INTERVAL_SECONDS = 1.0
 
 # Require 3 consecutive confident scheduled cycles agreeing on an allowed
 # (day-gated, forward-only) stage before it is sent to the Arduino.
-AI_TRANSITION_CONFIRMATIONS_REQUIRED = 3
+AI_TRANSITION_CONFIRMATIONS_REQUIRED = stage_schedule.CONFIRMATIONS_REQUIRED
 
 AI_AUTO_STAGE_TRANSITIONS = True
 AI_MIN_WINNING_VOTE_FRACTION = 0.60
@@ -1788,7 +1788,13 @@ def run_scheduled_check():
     global schedule_attempt
     with schedule_lock:
         attempt = schedule_attempt
-    today = stage_schedule.local_date(stage_schedule.local_now()).isoformat()
+    today_date = stage_schedule.local_date(stage_schedule.local_now())
+    today = today_date.isoformat()
+    with state_lock:
+        current = state.get("stage")
+    # Day 10 / day 24: observe-only pre-check. evaluate_stage_transition() sees no
+    # allowed target on those days, so it can't change the stage.
+    pre_check = stage_schedule.pre_check_target(stage_schedule.batch_day(batch_start_date(), today_date), current)
     if not attempt or attempt.get("date") != today:
         # A new window starts with a fresh candidate.
         reset_transition_candidate("window_started")
@@ -1801,7 +1807,9 @@ def run_scheduled_check():
             schedule_attempt, stage_schedule.local_now(),
             result.get("detectedStage") if result.get("success") else None,
             result.get("confidence") if result.get("success") else None,
-            applied=bool(hardware.get("success")))
+            applied=bool(hardware.get("success")),
+            confident=bool(result.get("success") and result.get("confident")),
+            pre_check=pre_check)
         attempt = schedule_attempt
         try:
             stage_schedule.save_attempt(STAGE_SCHEDULE_PATH, attempt)
@@ -1809,7 +1817,9 @@ def run_scheduled_check():
             print(f"[SCHEDULE] Could not save attempt: {error}", flush=True)
     print(f"[SCHEDULE] cycle {attempt['cycles']}/{stage_schedule.DAILY_MAX_CYCLES}: "
           f"{attempt['detectedStage']} ({attempt['confidence']}) -> {attempt['result']}", flush=True)
-    if attempt["result"] == "not_confirmed":
+    if attempt["result"] == "looks_ready":
+        print(f"[SCHEDULE] pre-check: flock looks ready for {attempt.get('preCheckStage')} (stage unchanged)", flush=True)
+    if attempt["result"] in ("not_confirmed", "not_ready", "looks_ready"):
         reset_transition_candidate("window_closed_not_confirmed")
     return True
 
@@ -3177,7 +3187,8 @@ def start_new_batch(start):
     day = stage_schedule.batch_day(start, today)
     result["batchDay"] = day
     with schedule_lock:
-        if result["status"] in ("applied", "already_starter") and stage_schedule.allowed_targets(day, "STARTER"):
+        if result["status"] in ("applied", "already_starter") and (
+                stage_schedule.allowed_targets(day, "STARTER") or stage_schedule.pre_check_target(day, "STARTER")):
             # A started attempt for today: ai_worker runs the burst right away.
             schedule_attempt = {"date": today.isoformat(), "cycles": 0, "result": "running", "target": None,
                                 "detectedStage": None, "confidence": None, "finishedAt": None, "started": "new_batch"}
