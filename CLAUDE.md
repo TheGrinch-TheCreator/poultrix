@@ -95,7 +95,7 @@ browser ──HTTPS──▶ Worker /api/pi/* (Supabase JWT + approved email + a
 ## Domain constraints
 
 - There are three stages: STARTER, GROWER, FINISHER. The backend and firmware use uppercase, and the UI uses capitalized names (`stageName()` maps between them).
-- Hopper/trough weights arrive in grams from the Arduino and are shown in kg for display only. The trough is calibrated on the Pi (maintenance site); the hopper's calibration is still the firmware's. Don't add calibration constants or feed rates in the frontend.
+- Hopper/trough weights arrive in grams from the Arduino and are shown in kg for display only (the trough in whole grams, `formatGrams`). The trough is calibrated on the Pi (maintenance site); the hopper's calibration is still the firmware's. Don't add calibration constants or feed rates in the frontend.
 - Flask itself has no auth (bypass needs the maintenance token). It is safe only because it binds `127.0.0.1` and is reached through the authenticated gateway. Never bind it to `0.0.0.0`, add CORS, add a public tunnel hostname or port-forward to it, or expose a Pi path without adding it to the gateway allowlist.
 - `documents/POULTRIX_Philippine_Standards.txt` (PCARRD-DOST) is the reference for stage temperature and lighting targets.
 

@@ -4,7 +4,7 @@ import { Camera, Cpu, Droplets, Fan, Flame, Lightbulb, ScanEye, Sun, Thermometer
 import { Card, CardTitle, Pill } from "@/components/poultrix/ui";
 import { agreeingDetection, sameStage, useAI, useHardware, display, stageName } from "@/lib/live-hardware";
 import { usePiEndpoint } from "@/lib/live-endpoints";
-import { formatWeight, readingStatus, formatReadingTime, type WeightPayload } from "@/lib/live-weights";
+import { formatWeight, formatGrams, readingStatus, formatReadingTime, type WeightPayload } from "@/lib/live-weights";
 
 export const Route = createFileRoute("/")({
   head: () => ({ meta: [{ title: "Dashboard — POULTRIX" }, { name: "description", content: "Live Poultrix hardware monitoring" }] }),
@@ -99,7 +99,7 @@ function Dashboard() {
               <p className="mt-2 text-xs text-muted-foreground">{weightError ? `Weight API: ${weightError}` : readingStatus(hopper)}</p>
               <p className="mt-1 text-xs text-muted-foreground">{formatReadingTime(hopper)}</p>
               <div className="mt-4 text-xs uppercase tracking-wider text-muted-foreground">Trough · calibrated load cell</div>
-              <div className="num mt-2 text-4xl font-extrabold">{formatWeight(trough)}</div>
+              <div className="num mt-2 text-4xl font-extrabold">{formatGrams(trough)}</div>
               <p className="mt-2 text-xs text-muted-foreground">{weightError ? `Weight API: ${weightError}` : readingStatus(trough)}</p>
               <p className="mt-1 text-xs text-muted-foreground">{formatReadingTime(trough)}</p>
               {!hopper && !trough && <p className="mt-2 text-xs text-amber-600">The API has not supplied separate hopper and trough fields. Verify the Raspberry Pi parser before displaying weights.</p>}

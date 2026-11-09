@@ -23,6 +23,11 @@ export function formatWeight(reading?: WeightReading | null): string {
   const value = grams(reading);
   return value === null ? "—" : `${(value / 1000).toFixed(3)} kg`;
 }
+/** Trough: small amounts, so whole grams. */
+export function formatGrams(reading?: WeightReading | null): string {
+  const value = grams(reading);
+  return value === null ? "—" : `${Math.round(value)} g`;
+}
 export function readingStatus(reading?: WeightReading | null): string {
   if (!reading) return "Not reported";
   if (reading.connected === false) return "Disconnected";
