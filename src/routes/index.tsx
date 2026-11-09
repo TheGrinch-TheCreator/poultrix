@@ -134,7 +134,7 @@ function Dashboard() {
             <Device on={connected && (hw?.heatersOn ?? 0) > 0} icon={<Flame className="h-5 w-5" />} label="Heat" value={connected ? `${(hw?.heatersOn ?? 0) > 0 ? 1 : 0}/1 relay ON` : "—"} />
             <Device on={connected && !!hw?.led} icon={<Lightbulb className="h-5 w-5" />} label="Light" value={connected ? hw?.led ? "ON" : "OFF" : "—"} />
           </div>
-          <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground"><Camera className="h-4 w-4" /> Camera: {hw?.camera?.connected ? "Connected" : "Unavailable"}</div>
+          <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground"><Camera className={`h-4 w-4 ${hw?.camera?.connected ? "text-ok" : ""}`} /> Camera: <span className={hw?.camera?.connected ? "font-semibold text-ok" : ""}>{hw?.camera?.connected ? "Connected" : "Unavailable"}</span></div>
           <p className="mt-3 text-xs text-muted-foreground">Device states are Arduino-reported commands, not independent electrical feedback.</p>
         </Card>
       </div>
