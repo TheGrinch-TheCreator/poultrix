@@ -43,6 +43,7 @@ const env = {
     fetch: async (url, init) => {
       upstreamCalls.push({ url, init });
       if (url.endsWith("/api/camera/stream")) return new Response("--frame", { headers: { "content-type": "multipart/x-mixed-replace; boundary=frame" } });
+      if (url.endsWith("/api/camera/live")) return new Response(new Uint8Array([0, 0, 0, 8, 102, 116, 121, 112]), { headers: { "content-type": "video/mp4" } });
       if (url.endsWith("/api/feeding/manual/start")) return Response.json({ error: "Pulse must be 100-1500 ms" }, { status: 400 });
       return Response.json({ ok: true, path: url });
     },
@@ -126,6 +127,9 @@ await check("bypass/login not exposed on main app", req("/api/pi/bypass/login", 
 inline(upstreamCalls.length === 0, " no upstream call for bypass routes");
 await check("camera with ?access_token", req(`/api/pi/camera/stream?access_token=${owner}`), 200, (r) => r.headers.get("content-type").startsWith("multipart/"));
 await check("?access_token refused on non-camera route", req(`/api/pi/snapshot?access_token=${owner}`), 401);
+await check("live video with bearer streams video/mp4", req("/api/pi/camera/live", { token: owner }), 200, (r) => r.headers.get("content-type") === "video/mp4");
+await check("live video signed out", req("/api/pi/camera/live"), 401);
+await check("live video POST refused", req("/api/pi/camera/live", { method: "POST", token: owner, body: "{}" }), 405);
 const before = supaUserCalls;
 for (let i = 0; i < 5; i++) await handlePiGateway(req("/api/pi/status", { token: owner }), env);
 inline(supaUserCalls === before, ` confirmed-email lookup cached (extra calls: ${supaUserCalls - before})`);

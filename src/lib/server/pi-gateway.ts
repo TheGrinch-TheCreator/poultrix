@@ -84,6 +84,8 @@ const ROUTES: readonly PiRoute[] = [
   { path: "/bypass/schedule-test/cancel", upstream: "/api/bypass/schedule-test/cancel", methods: POST, maintenance: true },
   // Camera (MJPEG); the only route that accepts ?access_token=
   { path: "/camera/stream", upstream: "/api/camera/stream", methods: GET, stream: true },
+  // Smooth live video (H.264 fMP4); the browser sends the bearer header (fetch).
+  { path: "/camera/live", upstream: "/api/camera/live", methods: GET, stream: true },
 ];
 
 /** Main app (Supabase login). No bypass routes: maintenance has its own
@@ -91,7 +93,11 @@ const ROUTES: readonly PiRoute[] = [
 export const APP_ROUTES: readonly PiRoute[] = ROUTES.filter((route) => !route.maintenance);
 /** Maintenance site (bypass password only; SPEC-maintenance-site.md). */
 export const MAINTENANCE_ROUTES: readonly PiRoute[] = ROUTES.filter(
-  (route) => route.maintenance || route.path === "/camera/stream" || route.path === "/snapshot",
+  (route) =>
+    route.maintenance ||
+    route.path === "/camera/stream" ||
+    route.path === "/camera/live" ||
+    route.path === "/snapshot",
 );
 
 /** "supabase": Supabase session + approved email (main app).

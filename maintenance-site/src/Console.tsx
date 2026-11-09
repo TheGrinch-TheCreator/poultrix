@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Card, CardTitle, Pill } from "@/components/poultrix/ui";
+import { LiveVideoPlayer } from "@/components/poultrix/LiveVideoPlayer";
 import poultrixLogo from "@/assets/poultrix-logo.png";
 import { piRequest, SESSION_KEY, sessionExpired, useCameraUrl, usePoll } from "./pi";
 import type { AI, StageSchedule } from "@/lib/live-hardware";
@@ -389,8 +390,32 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-/** Live camera, shown automatically; reconnects every 5 s if the stream drops. */
+/** Live camera, shown automatically: smooth 15 fps H.264 video (same player
+ *  as the main app), or the picture stream on browsers without MSE. */
 function CameraCard({ token, cameraOnline }: { token: string; cameraOnline: boolean }) {
+  return (
+    <Card className="overflow-hidden p-0">
+      <div className="relative aspect-video bg-black">
+        <LiveVideoPlayer
+          enabled={cameraOnline && !!token}
+          alt="Live poultry house camera"
+          className="h-full w-full object-contain"
+          openStream={(signal) =>
+            fetch("/api/pi/camera/live", {
+              signal,
+              cache: "no-store",
+              headers: { "x-poultrix-maintenance": token },
+            })
+          }
+          fallback={<PictureCamera token={token} cameraOnline={cameraOnline} />}
+        />
+      </div>
+    </Card>
+  );
+}
+
+/** Picture stream (MJPEG); reconnects every 5 s if the stream drops. */
+function PictureCamera({ token, cameraOnline }: { token: string; cameraOnline: boolean }) {
   const url = useCameraUrl(token);
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -400,17 +425,11 @@ function CameraCard({ token, cameraOnline }: { token: string; cameraOnline: bool
     return () => clearTimeout(timer);
   }, [failed]);
   const show = cameraOnline && !!url && !failed;
-  return (
-    <Card className="overflow-hidden p-0">
-      <div className="relative aspect-video bg-black">
-        {show ? (
-          <img key={attempt} src={url} alt="Live poultry house camera" className="h-full w-full object-contain" onError={() => setFailed(true)} />
-        ) : (
-          <div className="flex h-full items-center justify-center p-4 text-center text-sm text-white">
-            {!cameraOnline ? "Camera offline" : failed ? "Stream interrupted, reconnecting…" : "Connecting…"}
-          </div>
-        )}
-      </div>
-    </Card>
+  return show ? (
+    <img key={attempt} src={url} alt="Live poultry house camera" className="h-full w-full object-contain" onError={() => setFailed(true)} />
+  ) : (
+    <div className="flex h-full items-center justify-center p-4 text-center text-sm text-white">
+      {!cameraOnline ? "Camera offline" : failed ? "Stream interrupted, reconnecting…" : "Connecting…"}
+    </div>
   );
 }

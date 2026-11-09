@@ -999,28 +999,18 @@ def initialize_camera():
 
         new_camera = Picamera2()
 
-        configuration = (
-            new_camera
-            .create_video_configuration(
-                main={
-                    "size": (
-                        CAMERA_WIDTH,
-                        CAMERA_HEIGHT
-                    ),
-
-                    "format": "RGB888"
-                },
-
-                controls={
-                    "FrameRate":
-                        CAMERA_FPS
-                }
-            )
-        )
-
-        new_camera.configure(
-            configuration
-        )
+        main_stream = {"size": (CAMERA_WIDTH, CAMERA_HEIGHT), "format": "RGB888"}
+        controls = {"FrameRate": CAMERA_FPS}
+        try:
+            # Small extra stream for the smooth H.264 live view (VIDEO_*).
+            new_camera.configure(new_camera.create_video_configuration(
+                main=main_stream, lores={"size": (VIDEO_WIDTH, VIDEO_HEIGHT), "format": "YUV420"},
+                controls=controls))
+            camera_state["videoStream"] = True
+        except Exception as error:
+            print(f"[CAMERA] lores stream unavailable, live video falls back to pictures: {error}", flush=True)
+            new_camera.configure(new_camera.create_video_configuration(main=main_stream, controls=controls))
+            camera_state["videoStream"] = False
 
         new_camera.start()
 
@@ -1068,8 +1058,8 @@ def initialize_camera():
 # NEWEST frame (never a queue). The AI still captures full-size frames itself.
 STREAM_WIDTH = 640
 STREAM_HEIGHT = 360
-STREAM_FPS = 3
-STREAM_JPEG_QUALITY = 60
+STREAM_FPS = 5           # fallback picture stream (owner asked for more fps)
+STREAM_JPEG_QUALITY = 50  # ~20 KB/frame, ~0.8 Mbit/s at 5 fps
 STREAM_IDLE_SECONDS = 10  # producer stops this long after the last viewer left
 
 stream_condition = threading.Condition()
@@ -1160,6 +1150,194 @@ def generate_camera_frames():
         with stream_condition:
             stream_viewers -= 1
             stream_last_viewer = time.monotonic()
+
+
+# ============================================================
+# CAMERA LIVE VIDEO (H.264 in fragmented MP4)
+# ============================================================
+# Smooth live view (owner, 2026-11-09). The camera's small "lores" stream is
+# encoded to H.264 in software (Pi 5 has no hardware encoder; ~4 % of a core
+# at this size) and packed into fragmented MP4 by ffmpeg (stream copy). Each
+# fragment starts with a keyframe (1 s apart), so a viewer can join or skip
+# ahead at any fragment. ONE encoder serves every viewer; a viewer on a slow
+# link skips to the newest fragment instead of falling behind. The browser
+# plays it with Media Source Extensions in a <video> element; one request per
+# viewing session (Workers request budget). AI keeps using full-size frames.
+VIDEO_WIDTH = 640
+VIDEO_HEIGHT = 360
+VIDEO_BITRATE = 500_000          # bit/s; the farm upload is about 1 Mbit/s
+VIDEO_KEYFRAME_FRAMES = CAMERA_FPS  # one keyframe (and fragment) per second
+VIDEO_IDLE_SECONDS = 10          # encoder stops this long after the last viewer
+VIDEO_BACKLOG_FRAGMENTS = 3      # fragments kept for viewers that are behind
+
+video_condition = threading.Condition()
+video_init = None                # ftyp + moov bytes of the running encoder
+video_fragments = deque(maxlen=VIDEO_BACKLOG_FRAGMENTS)  # (seq, moof+mdat bytes)
+video_seq = 0
+video_viewers = 0
+video_last_viewer = 0.0
+video_running = False
+video_generation = 0             # increments each time the encoder starts
+
+
+def _read_mp4_boxes(stream):
+    """Yield (type, bytes) for each top-level MP4 box read from `stream`."""
+    while True:
+        header = stream.read(8)
+        if len(header) < 8:
+            return
+        size = int.from_bytes(header[:4], "big")
+        kind = header[4:8]
+        extra = b""
+        if size == 1:  # 64-bit size
+            extra = stream.read(8)
+            if len(extra) < 8:
+                return
+            size = int.from_bytes(extra, "big")
+            body_size = size - 16
+        elif size == 0:  # to end of stream; not produced for fragmented output
+            return
+        else:
+            body_size = size - 8
+        if body_size < 0:
+            return
+        body = stream.read(body_size)
+        if len(body) < body_size:
+            return
+        yield kind, header + extra + body
+
+
+def _publish_video(stdout, generation):
+    """Reader thread: split ffmpeg's fMP4 output into init + fragments."""
+    global video_init, video_seq
+    init, pending_moof = b"", None
+    for kind, box in _read_mp4_boxes(stdout):
+        with video_condition:
+            if generation != video_generation:
+                return
+            if kind in (b"ftyp", b"moov"):
+                init += box
+                if kind == b"moov":
+                    video_init = init
+                    video_condition.notify_all()
+            elif kind == b"moof":
+                pending_moof = box
+            elif kind == b"mdat" and pending_moof is not None:
+                video_seq += 1
+                video_fragments.append((video_seq, pending_moof + box))
+                pending_moof = None
+                video_condition.notify_all()
+
+
+def video_manager():
+    """Runs the encoder while someone watches; stops it when idle."""
+    global video_running, video_init, video_generation
+    import subprocess
+    from picamera2.encoders import LibavH264Encoder
+    from picamera2.outputs import FileOutput
+
+    process = encoder = None
+    try:
+        with video_condition:
+            video_generation += 1
+            generation = video_generation
+            video_init = None
+            video_fragments.clear()
+        process = subprocess.Popen(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error",
+             "-probesize", "32768", "-analyzeduration", "0", "-fflags", "+genpts+nobuffer",
+             "-f", "h264", "-framerate", str(CAMERA_FPS), "-i", "pipe:0",
+             "-c:v", "copy", "-f", "mp4", "-flush_packets", "1",
+             "-movflags", "frag_keyframe+empty_moov+default_base_moof", "pipe:1"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        threading.Thread(target=_publish_video, args=(process.stdout, generation),
+                         name="camera-video-reader", daemon=True).start()
+        encoder = LibavH264Encoder(bitrate=VIDEO_BITRATE, repeat=True,
+                                   iperiod=VIDEO_KEYFRAME_FRAMES, framerate=CAMERA_FPS)
+        with camera_lock:
+            camera.start_encoder(encoder, FileOutput(process.stdin), name="lores")
+        print("[CAMERA] live video started", flush=True)
+        while camera is not None and process.poll() is None:
+            time.sleep(1)
+            with video_condition:
+                if video_viewers == 0 and time.monotonic() - video_last_viewer > VIDEO_IDLE_SECONDS:
+                    break
+    except Exception as error:
+        camera_state["error"] = str(error)
+        print(f"[CAMERA] live video error: {error}", flush=True)
+    finally:
+        if encoder is not None:
+            try:
+                with camera_lock:
+                    camera.stop_encoder(encoder)
+            except Exception as error:
+                print(f"[CAMERA] stop encoder: {error}", flush=True)
+        if process is not None:
+            try:
+                process.stdin.close()
+            except Exception:
+                pass
+            try:
+                process.wait(timeout=3)
+            except Exception:
+                process.kill()
+        with video_condition:
+            video_running = False
+            video_init = None
+            video_fragments.clear()
+            video_condition.notify_all()
+        print("[CAMERA] live video stopped", flush=True)
+
+
+def _ensure_video():
+    global video_running
+    with video_condition:
+        if video_running:
+            return
+        video_running = True
+    threading.Thread(target=video_manager, name="camera-video", daemon=True).start()
+
+
+def generate_video():
+    global video_viewers, video_last_viewer
+    with video_condition:
+        video_viewers += 1
+        video_last_viewer = time.monotonic()
+    _ensure_video()
+    try:
+        with video_condition:
+            if not video_condition.wait_for(lambda: video_init is not None and video_fragments, timeout=10):
+                return  # encoder didn't start; the browser falls back to pictures
+            init = video_init
+            generation = video_generation
+            last = video_fragments[-1][0] - 1  # start at the newest keyframe fragment
+        yield init
+        while True:
+            with video_condition:
+                video_condition.wait_for(
+                    lambda: generation != video_generation or (video_fragments and video_fragments[-1][0] > last),
+                    timeout=5)
+                video_last_viewer = time.monotonic()
+                if generation != video_generation or not video_running:
+                    return  # encoder restarted or stopped: the browser reconnects
+                newer = [f for f in video_fragments if f[0] > last]
+                if newer and newer[0][0] != last + 1:
+                    newer = newer[-1:]  # fell behind: jump to the newest fragment
+            for seq, data in newer:
+                last = seq
+                yield data  # blocks while the network is slow
+    finally:
+        with video_condition:
+            video_viewers -= 1
+            video_last_viewer = time.monotonic()
+
+
+@app.route("/api/camera/live", methods=["GET"])
+def camera_live():
+    if camera is None or not camera_state.get("videoStream"):
+        return jsonify({"success": False, "error": "Live video unavailable"}), 503
+    return Response(generate_video(), mimetype="video/mp4", headers={
+        "Cache-Control": "no-cache", "Pragma": "no-cache", "X-Content-Type-Options": "nosniff"})
 
 
 # ============================================================
