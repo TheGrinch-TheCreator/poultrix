@@ -17,6 +17,7 @@ from datetime import date, datetime, timedelta
 PI = pathlib.Path(__file__).resolve().parents[2] / "raspberry-pi"
 sys.path.insert(0, str(PI))
 
+import ai_votes  # noqa: E402
 import stage_schedule as ss  # noqa: E402
 
 START = date(2026, 11, 1)
@@ -54,6 +55,7 @@ def load_rule(stage, day):
         "batch_start_date": lambda: START.isoformat(),
         "AI_TRANSITION_CONFIRMATIONS_REQUIRED": ss.CONFIRMATIONS_REQUIRED,
         "apply_confirmed_stage_to_arduino": apply_confirmed_stage_to_arduino,
+        "ai_votes": ai_votes,
     }
     exec(compile(ast.Module(body=nodes, type_ignores=[]), "app.py", "exec"), ns)
     return ns, applied
@@ -86,6 +88,19 @@ class PreCheckDays(unittest.TestCase):
                         for _ in range(ss.CONFIRMATIONS_REQUIRED)]
             self.assertEqual(statuses[:-1], ["pending"] * (ss.CONFIRMATIONS_REQUIRED - 1))
             self.assertEqual((applied, ns["state"]["stage"]), ([seen], seen))
+
+
+class PresetCandidates(unittest.TestCase):
+    def test_a_preset_candidate_never_counts_for_the_daily_check(self):
+        # Two maintenance-preset confirmations of GROWER are pending (owner,
+        # 2026-11-24); the daily camera check must start its own count at 1.
+        ns, applied = load_rule("STARTER", 11)
+        ns["ai_state"].update(transitionCandidate="GROWER", transitionConfirmations=2,
+                              transitionSource=ai_votes.SOURCE_SIMULATED)
+        result = ns["evaluate_stage_transition"]("GROWER", True, scheduled=True)
+        self.assertEqual((result["status"], result["confirmations"]), ("pending", 1))
+        self.assertEqual(ns["ai_state"]["transitionSource"], ai_votes.SOURCE_CAMERA)
+        self.assertEqual(applied, [])
 
 
 if __name__ == "__main__":

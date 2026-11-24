@@ -23,9 +23,9 @@ type BypassStatus = {
   readings?: Partial<Record<SensorKey, number | null>>;
   simulation?: { active?: boolean; stage?: string; framesAnalyzed?: number; confidence?: number | null };
   schedule?: StageSchedule;
-  manualStageHistory?: { at: string; from: string | null; to: string | null; stage?: string; votes?: number; confidence?: number | null; result?: string; error?: string | null }[];
+  manualStageHistory?: { at: string; from: string | null; to: string | null; stage?: string; votes?: number; confidence?: number | null; confirmations?: number; required?: number; result?: string; error?: string | null }[];
   stagePreset?: { stage: string; votes: number; confidence: number | null; setAt: string; by: string } | null;
-  stageSession?: { id: number; status: string; stage: string | null; votes: number | null; submitted: number; result: string | null; error: string | null; startedAt: string | null; finishedAt: string | null };
+  stageSession?: { id: number; status: string; stage: string | null; votes: number | null; submitted: number; confirmations?: number; required?: number; result: string | null; error: string | null; startedAt: string | null; finishedAt: string | null };
   trough?: {
     raw: number | null; zeroRaw: number | null; countsPerGram: number | null; zeroAt: string | null; checkedAt: string | null;
     commissioned: boolean; grams: number | null; reading: { valid: boolean; grams: number | null; reason: string | null };
@@ -39,7 +39,7 @@ const VOTES_DEFAULT = 30;
 const MIN_VALID_VOTES = 10; // AI_MIN_VALID_FRAMES on the Pi
 const SESSION_TEXT: Record<string, string> = {
   starting: "Starting…", voting: "Voting", applying: "Sending the stage to the Arduino…",
-  applied: "Stage applied", unchanged: "Stage already matched", not_confirmed: "Not confirmed (too few votes)",
+  pending: "Counted, stage not changed yet", applied: "Stage applied", unchanged: "Stage already matched", not_confirmed: "Not confirmed (too few votes)",
   failed: "Failed", cancelled: "Cancelled",
 };
 // Optional preset confidence: blank (none) or above 0 and at most 100 (raspberry-pi/ai_votes.py parse_confidence).
@@ -314,7 +314,7 @@ export function Console() {
                     {schedule && schedule.overdueDays > 0 && (
                       <p className="mb-2 text-sm text-warn">{title(schedule.overdueStage)} not confirmed by the AI for {schedule.overdueDays} day{schedule.overdueDays === 1 ? "" : "s"}.</p>
                     )}
-                    <p className="mb-3 text-xs text-muted-foreground">Save a stage and a number of votes. While maintenance is unlocked, each Camera check on the app's AI Growth Stage page runs the same 30-second AI vote with these votes instead of the camera, and the app shows the result as an AI result. If the votes confirm the stage, it is set on the Arduino (any stage, also backwards) when the 30 seconds end. The preset ends when you clear it, Return to automatic, Exit, or the session expires. Daily AI checks and Analyse real stage always use the camera. Test votes are recorded as simulated; no camera image or confidence is created.</p>
+                    <p className="mb-3 text-xs text-muted-foreground">Save a stage and a number of votes. While maintenance is unlocked, each Camera check on the app's AI Growth Stage page runs the same 30-second AI vote with these votes instead of the camera, and the app shows the result as an AI result. Like the daily AI check, the stage changes only after 3 confident checks in a row for the same new stage (any stage, also backwards); the 3rd check sets it on the Arduino when its 30 seconds end. The preset ends when you clear it, Return to automatic, Exit, or the session expires. Daily AI checks and Analyse real stage always use the camera. Test votes are recorded as simulated; no camera image or confidence is created.</p>
                     {(() => {
                       const session = status?.stageSession;
                       const running = !!session && ["starting", "voting", "applying"].includes(session.status);
@@ -339,6 +339,7 @@ export function Console() {
                             <p role="status" className="mb-3 text-sm">
                               <span className="font-semibold">{SESSION_TEXT[session.status] ?? session.status}</span>
                               {" · "}{title(session.stage)} · <span className="tabular-nums">{session.submitted}/{session.votes ?? "—"}</span> votes
+                              {session.result && session.required ? ` · confirmation ${session.confirmations ?? 0}/${session.required}` : ""}
                               {session.error ? ` · ${session.error}` : ""}
                             </p>
                           )}
@@ -388,7 +389,7 @@ export function Console() {
                         {status.manualStageHistory.slice().reverse().map((entry) => (
                           <li key={entry.at}>
                             {new Date(entry.at).toLocaleString()}: {entry.votes != null
-                              ? `${entry.votes} test votes for ${title(entry.stage)}${entry.confidence != null ? ` at ${pct(entry.confidence)}` : ""} · ${SESSION_TEXT[entry.result ?? ""] ?? entry.result ?? "—"}${entry.result === "applied" ? ` (${title(entry.from)} → ${title(entry.to)})` : ""}${entry.error ? ` · ${entry.error}` : ""}`
+                              ? `${entry.votes} test votes for ${title(entry.stage)}${entry.confidence != null ? ` at ${pct(entry.confidence)}` : ""} · ${SESSION_TEXT[entry.result ?? ""] ?? entry.result ?? "—"}${entry.required ? ` (${entry.confirmations ?? 0}/${entry.required})` : ""}${entry.result === "applied" ? ` (${title(entry.from)} → ${title(entry.to)})` : ""}${entry.error ? ` · ${entry.error}` : ""}`
                               : `${title(entry.from)} → ${title(entry.to)} (set here)`}
                           </li>
                         ))}

@@ -2,10 +2,10 @@ import { STAGE_REQUIREMENTS } from "@/lib/stage-requirements";
 import { createFileRoute } from "@tanstack/react-router";
 import { Camera } from "lucide-react";
 import { Card, CardTitle, Dot, PageHeader, Pill, StageBadge } from "@/components/poultrix/ui";
-import { agreeingDetection, sameStage, useAI, useHardware, stageName } from "@/lib/live-hardware";
+import { useAI, useHardware, stageName } from "@/lib/live-hardware";
 import { LiveCameraView } from "@/components/poultrix/LiveCameraView";
 export const Route=createFileRoute("/ai-stage")({component:AIPage});
-function AIPage(){const {data:ai,error,busy,classify}=useAI();const {data:hw}=useHardware();const agreeing=agreeingDetection(ai,hw?.stage);const detected=agreeing?.stage??null;const shownConfidence=agreeing?.confidence;const confirmed=stageName(hw?.stage);const camera=!!hw?.camera?.connected;return <><PageHeader title="AI Growth Stage" subtitle="Camera classification and daily stage checks" right={<Pill tone={error?"warn":ai?"ok":"neutral"}>{error?"API offline":ai?"Connected":"Waiting for AI"}</Pill>}/>
+function AIPage(){const {data:ai,error,busy,classify}=useAI();const {data:hw}=useHardware();const detected=stageName(ai?.detectedStage);const shownConfidence=typeof ai?.confidence==="number"&&Number.isFinite(ai.confidence)?ai.confidence:null;const confirmed=stageName(hw?.stage);const camera=!!hw?.camera?.connected;return <><PageHeader title="AI Growth Stage" subtitle="Camera classification and daily stage checks" right={<Pill tone={error?"warn":ai?"ok":"neutral"}>{error?"API offline":ai?"Connected":"Waiting for AI"}</Pill>}/>
 <div className="grid gap-5 lg:grid-cols-5"><Card className="overflow-hidden p-0 lg:col-span-3"><div className="relative aspect-video bg-black">{camera&&camera?<LiveCameraView enabled={camera} alt="Live Raspberry Pi camera" className="h-full w-full object-contain"/>:<div className="flex h-full items-center justify-center text-sm text-white">Waiting for camera</div>}<div className="absolute left-3 top-3 flex items-center gap-2 rounded-full bg-card/90 px-3 py-1 text-xs font-semibold"><Dot tone={camera?"ok":"danger"} pulse={camera}/><Camera className="h-3.5 w-3.5"/>{camera?"Camera · live":"Camera · offline"}</div></div><div className="p-5"><p className="font-semibold">AI status: {ai?.status||"Waiting for classification"}</p><p className="mt-2 text-xs text-muted-foreground">Stage changes happen only at the daily {ai?.schedule?.checkTime??"10:00"} check from day {ai?.schedule?.fromDay?.GROWER??"—"} (Grower) and day {ai?.schedule?.fromDay?.FINISHER??"—"} (Finisher), after 3 confident checks in a row, forward only. This button is a camera check and never changes the stage.</p><button disabled={busy||!!error} onClick={()=>void classify()} className="mt-4 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground disabled:opacity-50">{busy?"Analyzing…":"Camera check (doesn't change the stage)"}</button>{error&&<p className="mt-2 text-sm text-danger">{error}</p>}</div></Card>
 <Card className="lg:col-span-2"><CardTitle>Current result</CardTitle><p className="text-lg">Most recent detected stage</p><div className="my-3">{detected?<StageBadge stage={detected} size="lg"/>:<span className="text-muted-foreground">{"—"}</span>}</div><div className="num text-5xl font-extrabold">{typeof shownConfidence==="number"?`${shownConfidence.toFixed(1)}%`:"—"}</div><p className="text-sm text-muted-foreground">Confidence · last checked {ai?.lastInference?new Date(ai.lastInference).toLocaleString():"—"}</p><h3 className="mt-6 text-sm font-semibold text-muted-foreground">Confirmed hardware stage</h3><div className="mt-2">{confirmed?<StageBadge stage={confirmed}/>:"—"}</div><h3 className="mt-6 text-sm font-semibold text-muted-foreground">Stage changes</h3><p className="mt-2 text-sm text-muted-foreground">No persisted transition history available from this API yet.</p></Card></div>
 <Card className="mt-5"><CardTitle>Fixed AI-stage requirements · Philippine reference</CardTitle>
@@ -24,12 +24,10 @@ function AIPage(){const {data:ai,error,busy,classify}=useAI();const {data:hw}=us
       const raw = votes?.[name] ?? votes?.[name.toUpperCase()] ?? votes?.[name.toLowerCase()];
       return typeof raw === "number" && Number.isFinite(raw) && raw >= 0 ? raw : 0;
     });
-    const leader = names[counts.indexOf(Math.max(...counts))];
-    // Option 2: a finished vote is shown only when it agrees with the confirmed
-    // stage; a running vote is always shown live (owner, 2026-11-24).
-    const agrees = sameStage(leader, hw?.stage);
+    // Running votes are shown live, finished ones stay shown even when they
+    // differ from the confirmed stage (owner, 2026-11-24).
     const running = Boolean(ai?.cycleRunning);
-    const total = agrees || running ? counts.reduce((sum, value) => sum + value, 0) : 0;
+    const total = counts.reduce((sum, value) => sum + value, 0);
     const failed = Number(ai?.failedFrames ?? 0);
     const processed = Number(ai?.framesAnalyzed ?? 0) + failed;
     const expected = typeof ai?.framesExpected === "number" && ai.framesExpected > 0 ? ai.framesExpected : 30;

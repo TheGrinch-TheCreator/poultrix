@@ -210,6 +210,9 @@ ai_state = {
     "transitionConfirmed": False,
     "confirmedTransitionStage": None,
     "transitionStatus": "idle",
+    # Source of the pending candidate (ai_votes.SOURCE_*): camera and preset
+    # confirmations never add up to each other.
+    "transitionSource": None,
     "hardwareTransitionEnabled": AI_AUTO_STAGE_TRANSITIONS,
     "hardwareTransitionStatus": "idle",
     "hardwareTransitionError": None,
@@ -1684,7 +1687,8 @@ def evaluate_stage_transition(detected_stage, confident, scheduled=False):
             ai_state["confirmedTransitionStage"] = None
             ai_state["transitionStatus"] = status
         else:
-            if ai_state["transitionCandidate"] == detected:
+            if (ai_state["transitionCandidate"] == detected
+                    and ai_state.get("transitionSource", ai_votes.SOURCE_CAMERA) == ai_votes.SOURCE_CAMERA):
                 ai_state["transitionConfirmations"] += 1
             else:
                 ai_state["transitionCandidate"] = detected
@@ -1694,6 +1698,7 @@ def evaluate_stage_transition(detected_stage, confident, scheduled=False):
             ai_state["transitionConfirmed"] = confirmed
             ai_state["confirmedTransitionStage"] = detected if confirmed else None
             ai_state["transitionStatus"] = "confirmed" if confirmed else "pending"
+        ai_state["transitionSource"] = ai_votes.SOURCE_CAMERA
         result = {"currentStage": current, "detectedStage": detected or None,
                   "candidate": ai_state["transitionCandidate"],
                   "confirmations": ai_state["transitionConfirmations"],
@@ -2510,6 +2515,57 @@ def record_stage_session(entry):
         print(f"[SCHEDULE] Could not save manual stage history: {error}", flush=True)
 
 
+def evaluate_preset_transition(detected_stage, confident):
+    """Preset camera checks (owner, 2026-11-24): like the scheduled rule, the
+    stage changes only after AI_TRANSITION_CONFIRMATIONS_REQUIRED consecutive
+    confident checks of the same new stage. Unlike it: any direction and no day
+    gates (the owner's override). Camera confirmations never count here."""
+    required = AI_TRANSITION_CONFIRMATIONS_REQUIRED
+    with state_lock:
+        current = str(state.get("stage") or "").strip().upper()
+    detected = str(detected_stage or "").strip().upper()
+    with ai_state_lock:
+        own = ai_state.get("transitionSource") == ai_votes.SOURCE_SIMULATED
+        candidate = ai_state.get("transitionCandidate") if own else None
+        count = ai_state.get("transitionConfirmations", 0) if own else 0
+        if not confident or detected not in stage_schedule.STAGES:
+            status = "low_confidence_or_unknown"
+        elif detected == current:
+            status = "same_stage"
+        else:
+            status = None
+        if status is not None:
+            # Ends a pending preset candidate; a camera candidate is left alone.
+            count = 0
+            if own:
+                ai_state.update(transitionCandidate=None, transitionConfirmations=0, transitionConfirmed=False,
+                                confirmedTransitionStage=None, transitionStatus=status)
+        else:
+            count = min(count + 1 if candidate == detected else 1, required)
+            confirmed = count >= required
+            ai_state.update(transitionCandidate=detected, transitionConfirmations=count,
+                            transitionConfirmed=confirmed, confirmedTransitionStage=detected if confirmed else None,
+                            transitionStatus="confirmed" if confirmed else "pending",
+                            transitionSource=ai_votes.SOURCE_SIMULATED)
+    base = {"from": current or None, "confirmations": count, "required": required}
+    if status == "low_confidence_or_unknown":
+        return dict(base, result="not_confirmed")
+    if status == "same_stage":
+        return dict(base, result="unchanged", to=current)
+    if count < required:
+        return dict(base, result="pending")
+    with stage_session_lock:
+        stage_session["status"] = "applying"
+    hardware = apply_confirmed_stage_to_arduino(detected, owner=True)
+    if hardware.get("success"):
+        # A new stage starts a fresh AI candidate.
+        reset_transition_candidate("applied")
+        return dict(base, result="applied", to=hardware.get("to"), hardware=hardware)
+    # Stays confirmed: the next preset check tries the hand-off again.
+    status = hardware.get("status") or "failed"
+    return dict(base, result="failed", error=STAGE_HANDOFF_ERRORS.get(status, status), hardware=hardware)
+
+
 def run_simulated_vote_session(target, vote_count, token, user, confidence=None):
     """One 30-second vote with simulated votes instead of camera frames.
     confidence: the preset's confidence % for every vote, or None (no
@@ -2524,11 +2580,13 @@ def run_simulated_vote_session(target, vote_count, token, user, confidence=None)
                     for key in AI_RESULT_FIELDS}
     with state_lock:
         start_stage = str(state.get("stage") or "").strip().upper()
-    result, error, applied_to, outcome = None, None, None, None
+    result, error, applied_to, outcome, confirmations = None, None, None, None, 0
     try:
         with stage_session_lock:
             stage_session.update(id=stage_session["id"] + 1, status="voting", stage=target, votes=vote_count,
-                                 submitted=0, result=None, error=None, startedAt=utc_timestamp(), finishedAt=None)
+                                 submitted=0, result=None, error=None, confirmations=0,
+                                 required=AI_TRANSITION_CONFIRMATIONS_REQUIRED,
+                                 startedAt=utc_timestamp(), finishedAt=None)
             stage_session["from"] = start_stage or None
         with ai_state_lock:
             ai_state.update(status="classifying", cycleRunning=True, framesAnalyzed=0, failedFrames=0,
@@ -2570,28 +2628,14 @@ def run_simulated_vote_session(target, vote_count, token, user, confidence=None)
                             lastInference=utc_timestamp(), inferenceTimeMs=None,
                             cycleDuration=outcome["cycleDuration"], framesAnalyzed=outcome["frames"],
                             failedFrames=0, votes=dict(votes), status=outcome["status"], error=None)
-        with state_lock:
-            current = str(state.get("stage") or "").strip().upper()
-        if not outcome["confident"]:
-            # Too few votes for the vote rules: like an unconfident camera
-            # cycle, the stage is not changed.
-            result = "not_confirmed"
-        elif outcome["stage"].upper() == current:
-            result, applied_to = "unchanged", current
-        else:
-            with stage_session_lock:
-                stage_session["status"] = "applying"
-            hardware = apply_confirmed_stage_to_arduino(outcome["stage"], owner=True)
-            outcome["hardware"] = hardware
-            if hardware.get("success"):
-                # A new stage starts a fresh scheduled AI candidate.
-                reset_transition_candidate("applied")
-                result, applied_to = "applied", hardware.get("to")
-                print(f"[AUDIT] stage {current or '-'} -> {applied_to} by {user} "
-                      f"(maintenance preset, {vote_count} votes)", flush=True)
-            else:
-                status = hardware.get("status") or "failed"
-                result, error = "failed", STAGE_HANDOFF_ERRORS.get(status, status)
+        transition = evaluate_preset_transition(outcome["stage"], outcome["confident"])
+        outcome["transition"] = transition
+        outcome["hardware"] = transition.get("hardware")
+        result, error, applied_to = transition["result"], transition.get("error"), transition.get("to")
+        confirmations = transition["confirmations"]
+        if result == "applied":
+            print(f"[AUDIT] stage {transition['from'] or '-'} -> {applied_to} by {user} "
+                  f"(maintenance preset, {vote_count} votes, {confirmations} confirmations)", flush=True)
     except VoteSessionCancelled:
         with ai_state_lock:
             ai_state.update(previous)
@@ -2606,12 +2650,13 @@ def run_simulated_vote_session(target, vote_count, token, user, confidence=None)
         ai_cycle_lock.release()
         with stage_session_lock:
             stage_session.update(status=result or "failed", result=result or "failed", error=error,
-                                 finishedAt=utc_timestamp())
+                                 confirmations=confirmations, finishedAt=utc_timestamp())
             finished_at = stage_session["finishedAt"]
     if result != "cancelled":
         record_stage_session({"at": finished_at, "from": start_stage or None, "to": applied_to, "by": user,
                               "source": ai_votes.SOURCE_SIMULATED, "trigger": "camera_check", "stage": target,
-                              "votes": vote_count, "confidence": confidence, "result": result, "error": error})
+                              "votes": vote_count, "confidence": confidence, "confirmations": confirmations,
+                              "required": AI_TRANSITION_CONFIRMATIONS_REQUIRED, "result": result, "error": error})
     print(f"[BYPASS] vote session {target} x{vote_count}: {result}" + (f" ({error})" if error else ""), flush=True)
     return {"result": result, "error": error, "outcome": outcome}
 
@@ -2645,6 +2690,11 @@ def clear_stage_preset():
     global stage_preset
     with stage_preset_lock:
         stage_preset = None
+    with ai_state_lock:
+        pending = (ai_state.get("transitionSource") == ai_votes.SOURCE_SIMULATED
+                   and ai_state.get("transitionCandidate") is not None)
+    if pending:
+        reset_transition_candidate("idle")
 
 
 def run_preset_camera_check(preset, user):
@@ -2662,7 +2712,8 @@ def run_preset_camera_check(preset, user):
             "confidence": outcome["confidence"], "confident": outcome["confident"], "status": outcome["status"],
             "minimumConfidence": AI_MIN_CONFIDENCE, "cycleDuration": outcome["cycleDuration"],
             "framesAnalyzed": outcome["frames"], "failedFrames": 0, "votes": outcome["votes"],
-            "transition": {"status": session["result"], "hardware": hardware} if hardware else {"status": session["result"]},
+            "transition": {"status": session["result"], "confirmations": outcome["transition"]["confirmations"],
+                           "required": outcome["transition"]["required"], "hardware": hardware},
             "inferenceTimeMs": None, "source": ai_votes.SOURCE_SIMULATED}
 
 
