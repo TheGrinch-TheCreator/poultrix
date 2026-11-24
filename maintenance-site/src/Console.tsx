@@ -23,8 +23,8 @@ type BypassStatus = {
   readings?: Partial<Record<SensorKey, number | null>>;
   simulation?: { active?: boolean; stage?: string; framesAnalyzed?: number; confidence?: number | null };
   schedule?: StageSchedule;
-  manualStageHistory?: { at: string; from: string | null; to: string | null; stage?: string; votes?: number; result?: string; error?: string | null }[];
-  stagePreset?: { stage: string; votes: number; setAt: string; by: string } | null;
+  manualStageHistory?: { at: string; from: string | null; to: string | null; stage?: string; votes?: number; confidence?: number | null; result?: string; error?: string | null }[];
+  stagePreset?: { stage: string; votes: number; confidence: number | null; setAt: string; by: string } | null;
   stageSession?: { id: number; status: string; stage: string | null; votes: number | null; submitted: number; result: string | null; error: string | null; startedAt: string | null; finishedAt: string | null };
   trough?: {
     raw: number | null; zeroRaw: number | null; countsPerGram: number | null; zeroAt: string | null; checkedAt: string | null;
@@ -42,6 +42,10 @@ const SESSION_TEXT: Record<string, string> = {
   applied: "Stage applied", unchanged: "Stage already matched", not_confirmed: "Not confirmed (too few votes)",
   failed: "Failed", cancelled: "Cancelled",
 };
+// Optional preset confidence: blank (none) or above 0 and at most 100 (raspberry-pi/ai_votes.py parse_confidence).
+const MIN_CONFIDENCE = 60; // AI_MIN_CONFIDENCE on the Pi
+const validConfidence = (value: string) => value.trim() === "" || (Number.isFinite(Number(value)) && Number(value) > 0 && Number(value) <= 100);
+const pct = (value: number | null | undefined) => (typeof value === "number" ? `${value.toFixed(1)}%` : "no confidence");
 const validVotes = (value: string) => /^\d+$/.test(value.trim()) && Number(value) >= VOTES_MIN && Number(value) <= VOTES_MAX;
 const title = (stage: string | null | undefined) => (stage ? stage.charAt(0) + stage.slice(1).toLowerCase() : "—");
 type Snapshot = {
@@ -70,6 +74,7 @@ export function Console() {
   const [values, setValues] = useState<Record<SensorKey, string>>({ temperature: "", ldr: "", hopper: "", trough: "" });
   const [relayState, setRelayState] = useState<Record<number, boolean>>({});
   const [voteCount, setVoteCount] = useState(String(VOTES_DEFAULT));
+  const [confidenceText, setConfidenceText] = useState("");
 
   function clearSession(note?: string) {
     setToken("");
@@ -111,12 +116,14 @@ export function Console() {
 
   async function savePreset(target: (typeof STAGES)[number] | null) {
     if (target && !validVotes(voteCount)) { setMessage(`Votes must be a whole number from ${VOTES_MIN} to ${VOTES_MAX}.`); return; }
+    if (target && !validConfidence(confidenceText)) { setMessage("Confidence must be above 0 and at most 100, or blank."); return; }
     const votes = Number(voteCount);
+    const confidence = confidenceText.trim() === "" ? null : Number(confidenceText);
     setBusy(true);
     try {
-      await call("stage-preset", target ? { stage: target, votes } : { clear: true });
+      await call("stage-preset", target ? { stage: target, votes, confidence } : { clear: true });
       setMessage(target
-        ? `Preset saved: ${votes} votes for ${title(target)}. The next Camera check in the app runs the 30-second vote with it; if the votes confirm it, the house switches to ${title(target)}.`
+        ? `Preset saved: ${votes} votes for ${title(target)}, ${pct(confidence)}. The next Camera check in the app runs the 30-second vote with it; if the votes confirm it, the house switches to ${title(target)}.`
         : "Preset cleared. Camera checks in the app use the camera again.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
@@ -318,9 +325,14 @@ export function Console() {
                           </label>
                           {!validVotes(voteCount) && <p className="mb-2 text-xs text-danger">Enter a whole number from {VOTES_MIN} to {VOTES_MAX}.</p>}
                           {validVotes(voteCount) && Number(voteCount) < MIN_VALID_VOTES && <p className="mb-2 text-xs text-warn">Fewer than {MIN_VALID_VOTES} votes never confirms a stage (same rule as the camera).</p>}
+                          <label className="mb-3 block max-w-xs text-sm">Confidence % (optional, above 0 to 100)
+                            <input type="number" min="0.1" max="100" step="0.1" placeholder="none" className={inputClass + " mt-1"} value={confidenceText} onChange={(event) => setConfidenceText(event.target.value)} />
+                          </label>
+                          {!validConfidence(confidenceText) && <p className="mb-2 text-xs text-danger">Enter a number above 0 and at most 100, or leave it blank.</p>}
+                          {validConfidence(confidenceText) && confidenceText.trim() !== "" && Number(confidenceText) < MIN_CONFIDENCE && <p className="mb-2 text-xs text-warn">Below {MIN_CONFIDENCE}% the result is low confidence and never confirms a stage (same rule as the camera).</p>}
                           <p className="mb-3 text-sm">
                             {status?.stagePreset
-                              ? <>Stored preset: <span className="font-semibold">{title(status.stagePreset.stage)} · {status.stagePreset.votes} votes</span> (used by the next Camera check in the app)</>
+                              ? <>Stored preset: <span className="font-semibold">{title(status.stagePreset.stage)} · {status.stagePreset.votes} votes · {pct(status.stagePreset.confidence)}</span> (used by the next Camera check in the app)</>
                               : "No preset stored: Camera checks in the app use the camera."}
                           </p>
                           {session && session.status !== "idle" && (
@@ -332,7 +344,7 @@ export function Console() {
                           )}
                           <div className="flex flex-wrap gap-2">
                             {STAGES.map((value) => (
-                              <button key={value} className={btn} disabled={busy || !active || !validVotes(voteCount)} onClick={() => void savePreset(value)}>
+                              <button key={value} className={btn} disabled={busy || !active || !validVotes(voteCount) || !validConfidence(confidenceText)} onClick={() => void savePreset(value)}>
                                 {`Preset ${title(value)}${current === value ? " (current)" : ""}`}
                               </button>
                             ))}
@@ -376,7 +388,7 @@ export function Console() {
                         {status.manualStageHistory.slice().reverse().map((entry) => (
                           <li key={entry.at}>
                             {new Date(entry.at).toLocaleString()}: {entry.votes != null
-                              ? `${entry.votes} test votes for ${title(entry.stage)} · ${SESSION_TEXT[entry.result ?? ""] ?? entry.result ?? "—"}${entry.result === "applied" ? ` (${title(entry.from)} → ${title(entry.to)})` : ""}${entry.error ? ` · ${entry.error}` : ""}`
+                              ? `${entry.votes} test votes for ${title(entry.stage)}${entry.confidence != null ? ` at ${pct(entry.confidence)}` : ""} · ${SESSION_TEXT[entry.result ?? ""] ?? entry.result ?? "—"}${entry.result === "applied" ? ` (${title(entry.from)} → ${title(entry.to)})` : ""}${entry.error ? ` · ${entry.error}` : ""}`
                               : `${title(entry.from)} → ${title(entry.to)} (set here)`}
                           </li>
                         ))}

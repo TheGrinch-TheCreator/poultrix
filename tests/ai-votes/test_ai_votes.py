@@ -131,7 +131,7 @@ class FakePi:
             self.ns["state"]["stage"] = command.split(":", 1)[1]
         return True
 
-    def run(self, target, votes, cancel_after=None):
+    def run(self, target, votes, cancel_after=None, confidence=None):
         """Like the route: take the cycle lock, then run the session."""
         assert self.ns["ai_cycle_lock"].acquire(blocking=False)
         if cancel_after is not None:
@@ -140,7 +140,7 @@ class FakePi:
                 with self.ns["bypass_lock"]:
                     self.ns["bypass_token"] = None  # Exit bypass
             threading.Thread(target=cancel, daemon=True).start()
-        self.ns["run_simulated_vote_session"](target, votes, "tok", "ip:test")
+        self.ns["run_simulated_vote_session"](target, votes, "tok", "ip:test", confidence)
         return self.ns["stage_session_snapshot"]()
 
     def history(self):
@@ -330,6 +330,58 @@ class PresetCameraCheck(unittest.TestCase):
         self.assertEqual((result["success"], result.get("busy")), (False, True))
         self.pi.ns["ai_cycle_lock"].release()
         self.assertEqual(self.pi.ns["state"]["stage"], "GROWER")
+
+
+class PresetConfidence(unittest.TestCase):
+    """The optional confidence set with a maintenance preset."""
+
+    def setUp(self):
+        self.pi = FakePi(stage="GROWER")
+
+    def tearDown(self):
+        self.pi.close()
+
+    def test_parse(self):
+        for value, expected in ((None, None), ("", None), (87.5, 87.5), (100, 100.0), (60.004, 60.0), (0.1, 0.1)):
+            self.assertEqual(av.parse_confidence(value), expected, value)
+        for value in (0, -1, 100.01, float("nan"), float("inf"), True, "90", []):
+            with self.assertRaises(ValueError, msg=repr(value)):
+                av.parse_confidence(value)
+
+    def test_every_vote_carries_the_confidence(self):
+        self.assertIsNone(av.simulated_confidences({"Starter": 0, "Grower": 3, "Finisher": 0}, None))
+        self.assertEqual(av.simulated_confidences({"Starter": 0, "Grower": 3, "Finisher": 0}, 90.0),
+                         {"Starter": [], "Grower": [90.0] * 3, "Finisher": []})
+
+    def test_confidence_reaches_the_result_and_history(self):
+        session = self.pi.run("FINISHER", 80, confidence=87.5)
+        ai = self.pi.ns["ai_state"]
+        self.assertEqual(session["result"], "applied")
+        self.assertEqual((ai["confidence"], ai["confident"], ai["status"]), (87.5, True, "ready"))
+        self.assertEqual(self.pi.history()[-1]["confidence"], 87.5)
+
+    def test_low_confidence_never_confirms(self):
+        session = self.pi.run("FINISHER", 80, confidence=45.0)
+        ai = self.pi.ns["ai_state"]
+        self.assertEqual(session["result"], "not_confirmed")
+        self.assertEqual((ai["confidence"], ai["confident"], ai["status"]), (45.0, False, "low_confidence"))
+        self.assertEqual((self.pi.sent, self.pi.ns["state"]["stage"]), ([], "GROWER"))
+
+    def test_threshold_is_inclusive_like_the_camera(self):
+        self.assertEqual(self.pi.run("FINISHER", 30, confidence=60.0)["result"], "applied")
+
+    def test_camera_check_returns_the_preset_confidence(self):
+        self.pi.ns["stage_preset"] = {"stage": "GROWER", "votes": 30, "confidence": 92.3, "setAt": "t",
+                                      "by": "ip:test", "token": "tok"}
+        result = self.pi.ns["run_preset_camera_check"](self.pi.ns["active_stage_preset"](), "owner@example")
+        self.assertEqual((result["confidence"], result["status"], result["transition"]["status"]),
+                         (92.3, "ready", "unchanged"))
+        self.assertEqual(self.pi.ns["stage_preset_snapshot"]()["confidence"], 92.3)
+
+    def test_no_confidence_still_works(self):
+        session = self.pi.run("GROWER", 30)
+        self.assertEqual((session["result"], self.pi.ns["ai_state"]["confidence"]), ("unchanged", None))
+        self.assertIsNone(self.pi.history()[-1]["confidence"])
 
 
 def function_body(src, name):

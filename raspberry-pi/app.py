@@ -2469,7 +2469,8 @@ def _manual_history():
 # at the same time as a camera cycle), the same live ai_state fields, the same
 # tally (ai_votes.tally) and the same stage hand-off to the Arduino. The result is
 # tagged ai_votes.SOURCE_SIMULATED in ai_state and in the history database.
-# No camera image, model confidence or camera AI record is created or changed.
+# No camera image or camera AI record is created or changed. The confidence is
+# the one set in the preset (or none), never a model output.
 stage_session_lock = threading.Lock()
 stage_session = {"id": 0, "status": "idle", "stage": None, "votes": None, "submitted": 0,
                  "from": None, "result": None, "error": None, "startedAt": None, "finishedAt": None}
@@ -2509,8 +2510,10 @@ def record_stage_session(entry):
         print(f"[SCHEDULE] Could not save manual stage history: {error}", flush=True)
 
 
-def run_simulated_vote_session(target, vote_count, token, user):
+def run_simulated_vote_session(target, vote_count, token, user, confidence=None):
     """One 30-second vote with simulated votes instead of camera frames.
+    confidence: the preset's confidence % for every vote, or None (no
+    confidence; the confidence rule is then skipped).
     The caller holds ai_cycle_lock; it is released here. Returns
     {"result", "error", "outcome"} (outcome is None if no vote finished)."""
     stage_name = target.title()
@@ -2554,12 +2557,16 @@ def run_simulated_vote_session(target, vote_count, token, user):
             if now >= deadline and submitted == vote_count:
                 break
             time.sleep(0.05)
-        outcome = ai_votes.tally(votes, None, AI_MIN_CONFIDENCE, AI_MIN_VALID_FRAMES,
+        outcome = ai_votes.tally(votes, ai_votes.simulated_confidences(votes, confidence),
+                                 AI_MIN_CONFIDENCE, AI_MIN_VALID_FRAMES,
                                  AI_MIN_WINNING_VOTE_FRACTION)
+        if outcome["confidence"] is not None:
+            outcome["confidence"] = round(outcome["confidence"], 2)
         outcome["cycleDuration"] = round(time.monotonic() - cycle_start, 1)
         outcome["votes"] = dict(votes)
         with ai_state_lock:
-            ai_state.update(detectedStage=outcome["stage"], confidence=None, confident=outcome["confident"],
+            ai_state.update(detectedStage=outcome["stage"], confidence=outcome["confidence"],
+                            confident=outcome["confident"],
                             lastInference=utc_timestamp(), inferenceTimeMs=None,
                             cycleDuration=outcome["cycleDuration"], framesAnalyzed=outcome["frames"],
                             failedFrames=0, votes=dict(votes), status=outcome["status"], error=None)
@@ -2604,7 +2611,7 @@ def run_simulated_vote_session(target, vote_count, token, user):
     if result != "cancelled":
         record_stage_session({"at": finished_at, "from": start_stage or None, "to": applied_to, "by": user,
                               "source": ai_votes.SOURCE_SIMULATED, "trigger": "camera_check", "stage": target,
-                              "votes": vote_count, "result": result, "error": error})
+                              "votes": vote_count, "confidence": confidence, "result": result, "error": error})
     print(f"[BYPASS] vote session {target} x{vote_count}: {result}" + (f" ({error})" if error else ""), flush=True)
     return {"result": result, "error": error, "outcome": outcome}
 
@@ -2645,13 +2652,14 @@ def run_preset_camera_check(preset, user):
     as run_ai_cycle; on success the stage is applied if the votes confirm it."""
     if not ai_cycle_lock.acquire(blocking=False):
         return {"success": False, "error": "AI analysis cycle already running", "busy": True}
-    session = run_simulated_vote_session(preset["stage"], preset["votes"], preset["token"], user)
+    session = run_simulated_vote_session(preset["stage"], preset["votes"], preset["token"], user,
+                                         preset.get("confidence"))
     outcome = session["outcome"]
     if outcome is None:
         return {"success": False, "error": "AI analysis cycle was interrupted"}
     hardware = outcome.get("hardware")
     return {"success": True, "stage": outcome["stage"], "detectedStage": outcome["stage"],
-            "confidence": None, "confident": outcome["confident"], "status": outcome["status"],
+            "confidence": outcome["confidence"], "confident": outcome["confident"], "status": outcome["status"],
             "minimumConfidence": AI_MIN_CONFIDENCE, "cycleDuration": outcome["cycleDuration"],
             "framesAnalyzed": outcome["frames"], "failedFrames": 0, "votes": outcome["votes"],
             "transition": {"status": session["result"], "hardware": hardware} if hardware else {"status": session["result"]},
@@ -2677,14 +2685,15 @@ def bypass_stage_preset():
         return jsonify(error="Stage must be STARTER, GROWER or FINISHER"), 400
     try:
         vote_count = ai_votes.parse_vote_count(body.get("votes"))
+        confidence = ai_votes.parse_confidence(body.get("confidence"))
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
     with bypass_lock:
         token = bypass_token
     with stage_preset_lock:
-        stage_preset = {"stage": target, "votes": vote_count, "setAt": utc_timestamp(),
+        stage_preset = {"stage": target, "votes": vote_count, "confidence": confidence, "setAt": utc_timestamp(),
                         "by": request_user(), "token": token}
-    print(f"[AUDIT] stage preset {target} x{vote_count} by {request_user()}", flush=True)
+    print(f"[AUDIT] stage preset {target} x{vote_count} confidence {confidence} by {request_user()}", flush=True)
     return jsonify(success=True, stagePreset=stage_preset_snapshot())
 
 

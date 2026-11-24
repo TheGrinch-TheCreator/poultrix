@@ -71,6 +71,28 @@ def parse_vote_count(value):
     return value
 
 
+def parse_confidence(value):
+    """Optional confidence % for simulated votes (owner, 2026-11-24): None or
+    "" means none; otherwise a number above 0 and at most 100, rounded to 2
+    decimals. It goes through the same confidence rule as the camera."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("Confidence must be a number")
+    value = float(value)
+    if value != value or not 0 < value <= 100:
+        raise ValueError("Confidence must be above 0 and at most 100")
+    return round(value, 2)
+
+
+def simulated_confidences(votes, confidence):
+    """The per-vote confidences `tally` expects for simulated votes: every
+    vote carries the preset confidence, or None when no confidence was set."""
+    if confidence is None:
+        return None
+    return {name: [confidence] * count for name, count in votes.items()}
+
+
 def vote_offsets(count, duration_seconds):
     """When each simulated vote is submitted, in seconds from the cycle start:
     evenly spread over the window, the first at 0 like the first camera frame."""
