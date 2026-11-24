@@ -25,10 +25,11 @@ function AIPage(){const {data:ai,error,busy,classify}=useAI();const {data:hw}=us
       return typeof raw === "number" && Number.isFinite(raw) && raw >= 0 ? raw : 0;
     });
     const leader = names[counts.indexOf(Math.max(...counts))];
-    // Option 2: only show the votes when they agree with the confirmed stage.
+    // Option 2: a finished vote is shown only when it agrees with the confirmed
+    // stage; a running vote is always shown live (owner, 2026-11-24).
     const agrees = sameStage(leader, hw?.stage);
-    const total = agrees ? counts.reduce((sum, value) => sum + value, 0) : 0;
-    const running = agrees && Boolean(ai?.cycleRunning);
+    const running = Boolean(ai?.cycleRunning);
+    const total = agrees || running ? counts.reduce((sum, value) => sum + value, 0) : 0;
     const failed = Number(ai?.failedFrames ?? 0);
     const processed = Number(ai?.framesAnalyzed ?? 0) + failed;
     const expected = typeof ai?.framesExpected === "number" && ai.framesExpected > 0 ? ai.framesExpected : 30;
@@ -38,7 +39,7 @@ function AIPage(){const {data:ai,error,busy,classify}=useAI();const {data:hw}=us
           <div key={name}>
             <div className="mb-2 flex justify-between text-sm font-medium"><span>{name}</span><span className="tabular-nums">{counts[index]}</span></div>
             <div className="h-2.5 overflow-hidden rounded-full bg-muted">
-              <div className="h-full rounded-full bg-emerald-700 transition-all duration-300" style={{ width: `${(counts[index] / total) * 100}%` }} />
+              <div className="h-full rounded-full bg-emerald-700 transition-all duration-300" style={{ width: `${total > 0 ? (counts[index] / total) * 100 : 0}%` }} />
             </div>
           </div>
         ))}

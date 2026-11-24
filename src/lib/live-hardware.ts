@@ -11,10 +11,13 @@ export function useHardware() {
  const { snapshot, error } = usePiSnapshot();
  return { data: snapshot?.status ?? null, error: error ? piErrorMessage(error) : null, errorCode: error?.code ?? null };
 }
+const CHECK_REFRESH_MS = 1000;
 export function useAI() {
  const { snapshot, error } = usePiSnapshot();
  const [busy,setBusy]=useState(false); const [actionError,setActionError]=useState<string|null>(null);
- const classify=async()=>{setBusy(true);try{await piFetch("/ai/classify",{method:"POST"});setActionError(null);await refreshSnapshot()}catch(e){setActionError(piErrorMessage(e))}finally{setBusy(false)}};
+ // While your own 30-second check runs, refresh every second so the votes
+ // count up live (30 extra requests per check, only when pressed).
+ const classify=async()=>{setBusy(true);const live=setInterval(()=>void refreshSnapshot(),CHECK_REFRESH_MS);try{await piFetch("/ai/classify",{method:"POST"});setActionError(null);await refreshSnapshot()}catch(e){setActionError(piErrorMessage(e))}finally{clearInterval(live);setBusy(false)}};
  return { data: snapshot?.ai ?? null, error: actionError ?? (error ? piErrorMessage(error) : null), busy, classify };
 }
 export const display=(v:number|null|undefined,unit="")=>typeof v==="number"&&Number.isFinite(v)?`${v.toFixed(1)}${unit}`:"—";
