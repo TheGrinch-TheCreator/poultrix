@@ -1,0 +1,295 @@
+"""The 30-second AI vote (raspberry-pi/ai_votes.py) and the maintenance vote
+simulator in raspberry-pi/app.py.
+
+app.py needs a camera, serial port and YOLO, so it can't be imported on a dev
+machine. The session code is extracted from its source (ast) and run against a
+fake Arduino, so the tests check the code that actually ships. The 30 s window
+is shortened to a fraction of a second.
+
+Run: python -m unittest discover -s tests/ai-votes -v
+"""
+import ast
+import json
+import pathlib
+import sys
+import tempfile
+import threading
+import time
+import unittest
+
+PI = pathlib.Path(__file__).resolve().parents[2] / "raspberry-pi"
+sys.path.insert(0, str(PI))
+
+import ai_votes as av  # noqa: E402
+import stage_schedule as ss  # noqa: E402
+
+MIN_CONF, MIN_FRAMES, MIN_FRACTION = 60.0, 10, 0.60
+
+
+def tally(votes, confidences=None):
+    return av.tally(votes, confidences, MIN_CONF, MIN_FRAMES, MIN_FRACTION)
+
+
+class Tally(unittest.TestCase):
+    def test_camera_cycle_rules_unchanged(self):
+        # Same outcomes as the inline rule run_ai_cycle had before.
+        confident = tally({"Starter": 2, "Grower": 25, "Finisher": 3},
+                          {"Starter": [70, 70], "Grower": [80] * 25, "Finisher": [65] * 3})
+        self.assertEqual((confident["stage"], confident["confident"], confident["status"]), ("Grower", True, "ready"))
+        self.assertAlmostEqual(confident["confidence"], 80.0)
+        low_conf = tally({"Starter": 0, "Grower": 20, "Finisher": 0}, {"Grower": [55] * 20})
+        self.assertEqual((low_conf["confident"], low_conf["status"]), (False, "low_confidence"))
+        split = tally({"Starter": 9, "Grower": 11, "Finisher": 10}, {"Starter": [90] * 9, "Grower": [90] * 11, "Finisher": [90] * 10})
+        self.assertFalse(split["confident"])  # 11/30 < 60 %
+        few = tally({"Starter": 0, "Grower": 9, "Finisher": 0}, {"Grower": [99] * 9})
+        self.assertFalse(few["confident"])  # fewer than 10 frames
+
+    def test_tie_is_rejected(self):
+        result = tally({"Starter": 15, "Grower": 15, "Finisher": 0}, {"Starter": [90] * 15, "Grower": [90] * 15})
+        self.assertEqual((result["stage"], result["status"]), (None, "tie"))
+
+    def test_simulated_votes_have_no_confidence(self):
+        result = tally({"Starter": 0, "Grower": 0, "Finisher": 80})
+        self.assertEqual((result["stage"], result["confidence"], result["confident"], result["frames"]),
+                         ("Finisher", None, True, 80))
+        self.assertFalse(tally({"Starter": 0, "Grower": 5, "Finisher": 0})["confident"])
+        self.assertEqual(tally(av.empty_votes())["status"], "no_votes")
+
+
+class VoteCount(unittest.TestCase):
+    def test_valid(self):
+        self.assertEqual(av.parse_vote_count(None), av.SIM_VOTES_DEFAULT)
+        for value, expected in ((1, 1), (80, 80), (300, 300), (80.0, 80)):
+            self.assertEqual(av.parse_vote_count(value), expected)
+
+    def test_invalid(self):
+        for value in (0, -5, 301, 10**9, 2.5, float("nan"), float("inf"), True, "80", [], {}):
+            with self.assertRaises(ValueError, msg=repr(value)):
+                av.parse_vote_count(value)
+
+    def test_offsets_fill_the_window(self):
+        offsets = av.vote_offsets(80, 30)
+        self.assertEqual(len(offsets), 80)
+        self.assertEqual(offsets[0], 0)
+        self.assertTrue(all(0 <= a < b < 30 for a, b in zip(offsets, offsets[1:])))
+        self.assertEqual(av.vote_offsets(1, 30), [0])
+
+
+FUNCTIONS = {"stage_session_snapshot", "stage_session_token_valid", "record_stage_session",
+             "run_simulated_vote_session", "apply_confirmed_stage_to_arduino", "reset_transition_candidate",
+             "_manual_history"}
+NAMES = {"AI_RESULT_FIELDS", "STAGE_HANDOFF_ERRORS"}
+CLASSES = {"VoteSessionCancelled"}
+WINDOW = 0.4  # seconds, instead of 30
+
+
+class FakePi:
+    """app.py's session code with a fake Arduino that acknowledges STAGE:."""
+
+    def __init__(self, stage="GROWER", online=True, ack=True, feeding=False):
+        tree = ast.parse((PI / "app.py").read_text(encoding="utf-8"))
+        nodes = [n for n in tree.body if
+                 (isinstance(n, ast.FunctionDef) and n.name in FUNCTIONS)
+                 or (isinstance(n, ast.ClassDef) and n.name in CLASSES)
+                 or (isinstance(n, ast.Assign) and any(getattr(t, "id", None) in NAMES for t in n.targets))]
+        found = {getattr(n, "name", None) or n.targets[0].id for n in nodes}
+        assert found == FUNCTIONS | NAMES | CLASSES, f"missing in app.py: {FUNCTIONS | NAMES | CLASSES - found}"
+        self.tmp = tempfile.TemporaryDirectory()
+        self.sent = []
+        self.ack = ack
+        ns = self.ns = {
+            "threading": threading, "time": time, "json": json, "os": __import__("os"), "ai_votes": av,
+            "state": {"stage": stage}, "state_lock": threading.Lock(),
+            "ai_state": {"status": "ready", "detectedStage": "Grower", "confidence": 88.5, "confident": True,
+                         "lastInference": "2026-11-24T02:00:00+00:00", "inferenceTimeMs": 120.0, "cycleDuration": 30.0,
+                         "framesAnalyzed": 30, "failedFrames": 0, "votes": {"Starter": 0, "Grower": 30, "Finisher": 0},
+                         "error": None, "source": "camera", "framesExpected": 30, "cycleRunning": False,
+                         "transitionCandidate": "FINISHER", "transitionConfirmations": 2, "transitionConfirmed": False,
+                         "confirmedTransitionStage": None, "transitionStatus": "pending",
+                         "hardwareTransitionStatus": "idle", "hardwareTransitionError": None,
+                         "lastHardwareTransition": None, "lastTransitionResult": None},
+            "ai_state_lock": threading.Lock(), "ai_cycle_lock": threading.Lock(),
+            "bypass_lock": threading.RLock(), "bypass_token": "tok", "bypass_expires": time.monotonic() + 3600,
+            "feeding_lock": threading.Lock(), "feeding_pending": None, "feeding_gates": {1: {"status": "DISPENSING" if feeding else "IDLE"}},
+            "arduino_online_locked": lambda: online, "controller_ready_locked": lambda: online,
+            "bypass_active": lambda: True, "AI_AUTO_STAGE_TRANSITIONS": True,
+            "AI_STAGE_ACK_TIMEOUT_SECONDS": 0.3, "AI_CYCLE_DURATION_SECONDS": WINDOW,
+            "AI_MIN_CONFIDENCE": MIN_CONF, "AI_MIN_VALID_FRAMES": MIN_FRAMES, "AI_MIN_WINNING_VOTE_FRACTION": MIN_FRACTION,
+            "STAGE_MANUAL_PATH": pathlib.Path(self.tmp.name) / "stage_manual.json", "STAGE_MANUAL_HISTORY": 20,
+            "utc_timestamp": lambda: time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()) + f".{time.monotonic_ns()}",
+            "send_command": self.send_command, "print": lambda *a, **k: None,
+            "stage_session_lock": threading.Lock(),
+            "stage_session": {"id": 0, "status": "idle", "stage": None, "votes": None, "submitted": 0, "from": None,
+                              "result": None, "error": None, "startedAt": None, "finishedAt": None},
+        }
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), "app.py", "exec"), ns)
+
+    def send_command(self, command):
+        self.sent.append(command)
+        if self.ack and command.startswith("STAGE:"):
+            self.ns["state"]["stage"] = command.split(":", 1)[1]
+        return True
+
+    def run(self, target, votes, cancel_after=None):
+        """Like the route: take the cycle lock, then run the session."""
+        assert self.ns["ai_cycle_lock"].acquire(blocking=False)
+        if cancel_after is not None:
+            def cancel():
+                time.sleep(cancel_after)
+                with self.ns["bypass_lock"]:
+                    self.ns["bypass_token"] = None  # Exit bypass
+            threading.Thread(target=cancel, daemon=True).start()
+        self.ns["run_simulated_vote_session"](target, votes, "tok", "ip:test")
+        return self.ns["stage_session_snapshot"]()
+
+    def history(self):
+        return self.ns["_manual_history"]()
+
+    def close(self):
+        self.tmp.cleanup()
+
+
+class VoteSession(unittest.TestCase):
+    def setUp(self):
+        self.pis = []
+
+    def tearDown(self):
+        for pi in self.pis:
+            pi.close()
+
+    def pi(self, **kwargs):
+        pi = FakePi(**kwargs)
+        self.pis.append(pi)
+        return pi
+
+    def test_votes_reach_the_shared_ai_state_and_apply_the_stage(self):
+        pi = self.pi(stage="GROWER")
+        session = pi.run("FINISHER", 80)
+        ai = pi.ns["ai_state"]
+        self.assertEqual(session["result"], "applied")
+        self.assertEqual(session["submitted"], 80)
+        self.assertEqual(ai["votes"], {"Starter": 0, "Grower": 0, "Finisher": 80})
+        self.assertEqual((ai["detectedStage"], ai["framesAnalyzed"], ai["framesExpected"]), ("Finisher", 80, 80))
+        self.assertEqual((ai["status"], ai["confident"], ai["confidence"]), ("ready", True, None))
+        self.assertEqual(ai["source"], av.SOURCE_SIMULATED)
+        self.assertFalse(ai["cycleRunning"])
+        self.assertEqual(pi.ns["state"]["stage"], "FINISHER")
+        self.assertEqual(pi.sent, ["STAGE:FINISHER"])
+        self.assertEqual(ai["lastTransitionResult"]["status"], "applied")
+        # A new stage starts a fresh scheduled candidate.
+        self.assertEqual((ai["transitionCandidate"], ai["transitionConfirmations"], ai["transitionStatus"]),
+                         (None, 0, "applied"))
+        self.assertFalse(pi.ns["ai_cycle_lock"].locked())
+        entry = pi.history()[-1]
+        self.assertEqual((entry["source"], entry["stage"], entry["votes"], entry["result"], entry["from"], entry["to"]),
+                         (av.SOURCE_SIMULATED, "FINISHER", 80, "applied", "GROWER", "FINISHER"))
+
+    def test_votes_take_the_whole_window_and_arrive_gradually(self):
+        pi = self.pi()
+        seen = []
+        stop = threading.Event()
+
+        def watch():
+            while not stop.is_set():
+                with pi.ns["ai_state_lock"]:
+                    seen.append(pi.ns["ai_state"]["framesAnalyzed"])
+                time.sleep(0.02)
+        watcher = threading.Thread(target=watch)
+        watcher.start()
+        started = time.monotonic()
+        pi.run("GROWER", 40)
+        elapsed = time.monotonic() - started
+        stop.set()
+        watcher.join()
+        self.assertGreaterEqual(elapsed, WINDOW)
+        self.assertTrue(any(0 < n < 40 for n in seen), "votes should be published as they land")
+
+    def test_backwards_is_allowed_for_the_owner(self):
+        pi = self.pi(stage="FINISHER")
+        self.assertEqual(pi.run("STARTER", 30)["result"], "applied")
+        self.assertEqual(pi.ns["state"]["stage"], "STARTER")
+
+    def test_same_stage_changes_nothing_on_the_arduino(self):
+        pi = self.pi(stage="GROWER")
+        session = pi.run("GROWER", 30)
+        self.assertEqual(session["result"], "unchanged")
+        self.assertEqual(pi.sent, [])
+        # The real scheduled candidate is left alone.
+        self.assertEqual(pi.ns["ai_state"]["transitionConfirmations"], 2)
+
+    def test_too_few_votes_never_confirms(self):
+        pi = self.pi(stage="GROWER")
+        session = pi.run("FINISHER", 9)
+        self.assertEqual(session["result"], "not_confirmed")
+        self.assertEqual((pi.ns["ai_state"]["status"], pi.ns["ai_state"]["confident"]), ("low_confidence", False))
+        self.assertEqual((pi.sent, pi.ns["state"]["stage"]), ([], "GROWER"))
+
+    def test_no_ack_and_feeding_are_reported(self):
+        pi = self.pi(stage="GROWER", ack=False)
+        session = pi.run("FINISHER", 30)
+        self.assertEqual((session["result"], session["error"]), ("failed", "Arduino did not confirm the new stage"))
+        pi = self.pi(stage="GROWER", feeding=True)
+        session = pi.run("FINISHER", 30)
+        self.assertEqual(session["result"], "failed")
+        self.assertIn("dispensed", session["error"])
+        self.assertEqual(pi.ns["state"]["stage"], "GROWER")
+
+    def test_exit_cancels_and_restores_the_previous_result(self):
+        pi = self.pi(stage="GROWER")
+        before = {k: pi.ns["ai_state"][k] for k in pi.ns["AI_RESULT_FIELDS"]}
+        session = pi.run("FINISHER", 80, cancel_after=WINDOW / 3)
+        self.assertEqual(session["result"], "cancelled")
+        after = {k: pi.ns["ai_state"][k] for k in pi.ns["AI_RESULT_FIELDS"]}
+        self.assertEqual(after, before)
+        self.assertEqual((pi.sent, pi.ns["state"]["stage"], pi.history()), ([], "GROWER", []))
+        self.assertFalse(pi.ns["ai_cycle_lock"].locked())
+
+    def test_several_sessions_in_a_row(self):
+        pi = self.pi(stage="STARTER")
+        for target, votes, result in (("GROWER", 30, "applied"), ("GROWER", 50, "unchanged"),
+                                      ("FINISHER", 5, "not_confirmed"), ("FINISHER", 120, "applied")):
+            session = pi.run(target, votes)
+            self.assertEqual(session["result"], result, (target, votes))
+            self.assertEqual(sum(pi.ns["ai_state"]["votes"].values()), votes)
+            self.assertEqual(pi.ns["ai_state"]["framesExpected"], votes)
+        self.assertEqual(pi.ns["state"]["stage"], "FINISHER")
+        self.assertEqual([h["result"] for h in pi.history()], ["applied", "unchanged", "not_confirmed", "applied"])
+
+    def test_session_and_camera_cycle_share_one_lock(self):
+        pi = self.pi()
+        assert pi.ns["ai_cycle_lock"].acquire(blocking=False)  # a camera cycle is running
+        self.assertFalse(pi.ns["ai_cycle_lock"].acquire(blocking=False))  # route would answer 409
+        pi.ns["ai_cycle_lock"].release()
+
+    def test_ai_transition_path_is_unchanged(self):
+        # Scheduled AI hand-off (owner=False) still refuses during maintenance.
+        pi = self.pi(stage="GROWER")
+        result = pi.ns["apply_confirmed_stage_to_arduino"]("FINISHER")
+        self.assertEqual(result["status"], "hardware_busy_or_offline")
+        self.assertEqual(pi.sent, [])
+
+
+class AppWiring(unittest.TestCase):
+    """Static checks on app.py for the parts the fake can't run."""
+
+    src = (PI / "app.py").read_text(encoding="utf-8")
+
+    def test_camera_cycle_uses_the_shared_tally_and_tags_its_source(self):
+        cycle = self.src[self.src.index("def run_ai_cycle("):self.src.index("def run_scheduled_check(")]
+        self.assertIn("ai_votes.tally(votes, confidence_by_stage", cycle)
+        self.assertIn('ai_state["source"] = ai_votes.SOURCE_CAMERA', cycle)
+        self.assertIn("remember_agreeing_detection(", cycle)
+
+    def test_simulated_results_never_feed_camera_records(self):
+        session = self.src[self.src.index("def run_simulated_vote_session("):self.src.index('@app.route("/api/bypass/confirm-stage"')]
+        self.assertNotIn("remember_agreeing_detection", session)
+        self.assertNotIn("classify_current_frame", session)
+        self.assertIn("(source IS NULL OR source = ?)", self.src)
+        self.assertIn('ai.get("source") or ai_votes.SOURCE_CAMERA', self.src)
+
+    def test_stage_constants_match(self):
+        self.assertEqual(tuple(s.title() for s in ss.STAGES), av.STAGE_NAMES)
+
+
+if __name__ == "__main__":
+    unittest.main()

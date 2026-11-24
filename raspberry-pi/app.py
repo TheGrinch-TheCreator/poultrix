@@ -16,6 +16,7 @@ import json
 
 import stage_schedule
 import feeding_schedule
+import ai_votes
 
 
 # ============================================================
@@ -195,6 +196,11 @@ ai_state = {
     },
     "cycleRunning": False,
     "failedFrames": 0,
+    # Votes one full cycle can hold (30 for a camera cycle, the chosen count
+    # for a maintenance vote session) and where the last result came from
+    # (ai_votes.SOURCE_*). Never shown in the main app.
+    "framesExpected": int(AI_CYCLE_DURATION_SECONDS / AI_SAMPLE_INTERVAL_SECONDS),
+    "source": None,
     "lastTransitionResult": None,
 
     # Stage-transition monitoring.
@@ -1511,15 +1517,19 @@ def reset_transition_candidate(status):
                         transitionStatus=status)
 
 
-def apply_confirmed_stage_to_arduino(target_stage):
-    """Send a validated stage only; never initiate a feeding command."""
+def apply_confirmed_stage_to_arduino(target_stage, owner=False):
+    """Send a validated stage only; never initiate a feeding command.
+
+    owner=True is the owner's Confirm stage on the maintenance site (after its
+    vote session): any direction, allowed during maintenance, and needs only an
+    online Arduino, like the manual stage change it replaced."""
     target = str(target_stage or "").strip().upper()
     with state_lock:
         current = str(state.get("stage") or "").strip().upper()
-        connected = controller_ready_locked()
-    if target not in ("STARTER", "GROWER", "FINISHER") or current not in ("STARTER", "GROWER", "FINISHER") or target == current:
+        connected = arduino_online_locked() if owner else controller_ready_locked()
+    if target not in ("STARTER", "GROWER", "FINISHER") or (not owner and current not in ("STARTER", "GROWER", "FINISHER")) or target == current:
         return {"success": False, "status": "invalid_or_same_stage"}
-    if not AI_AUTO_STAGE_TRANSITIONS or not connected or bypass_active():
+    if not connected or (not owner and (not AI_AUTO_STAGE_TRANSITIONS or bypass_active())):
         return {"success": False, "status": "hardware_busy_or_offline"}
     with feeding_lock:
         if feeding_pending is not None or any(g.get("status") == "DISPENSING" for g in feeding_gates.values()):
@@ -1610,8 +1620,9 @@ def current_agreeing_detection():
         try:
             row = conn.execute(
                 "SELECT recorded_at, confidence_pct FROM ai_checks WHERE upper(detected_stage) = ? "
-                "AND status = 'ready' AND confidence_pct >= ? ORDER BY id DESC LIMIT 1",
-                (current, AI_MIN_CONFIDENCE)).fetchone()
+                "AND status = 'ready' AND confidence_pct >= ? AND (source IS NULL OR source = ?) "
+                "ORDER BY id DESC LIMIT 1",
+                (current, AI_MIN_CONFIDENCE, ai_votes.SOURCE_CAMERA)).fetchone()
         finally:
             conn.close()
         if row:
@@ -1760,6 +1771,8 @@ def run_ai_cycle(scheduled=False):
             ai_state["failedFrames"] = 0
             ai_state["votes"] = {"Starter": 0, "Grower": 0, "Finisher": 0}
             ai_state["error"] = None
+            ai_state["source"] = ai_votes.SOURCE_CAMERA
+            ai_state["framesExpected"] = int(AI_CYCLE_DURATION_SECONDS / AI_SAMPLE_INTERVAL_SECONDS)
 
         print(
             "[AI] Starting 30-second "
@@ -1834,15 +1847,12 @@ def run_ai_cycle(scheduled=False):
                 "No valid AI frames were analyzed during the cycle"
             )
 
-        max_votes = max(votes.values())
-        winners = [
-            stage
-            for stage, count in votes.items()
-            if count == max_votes
-        ]
+        # Shared with the maintenance vote simulator (ai_votes.tally).
+        outcome = ai_votes.tally(votes, confidence_by_stage, AI_MIN_CONFIDENCE,
+                                 AI_MIN_VALID_FRAMES, AI_MIN_WINNING_VOTE_FRACTION)
 
         # A tied vote is intentionally rejected rather than guessing.
-        if len(winners) != 1:
+        if outcome["status"] == "tie":
             if scheduled:
                 reset_transition_candidate("tie")
             cycle_duration = time.monotonic() - cycle_start
@@ -1887,22 +1897,9 @@ def run_ai_cycle(scheduled=False):
                 "votes": votes
             }
 
-        winning_stage = winners[0]
-
-        winning_confidences = (
-            confidence_by_stage[winning_stage]
-        )
-
-        winning_confidence = (
-            sum(winning_confidences)
-            / len(winning_confidences)
-        )
-
-        confident = (
-            winning_confidence >= AI_MIN_CONFIDENCE
-            and frames_analyzed >= AI_MIN_VALID_FRAMES
-            and max_votes / frames_analyzed >= AI_MIN_WINNING_VOTE_FRACTION
-        )
+        winning_stage = outcome["stage"]
+        winning_confidence = outcome["confidence"]
+        confident = outcome["confident"]
 
         average_inference_ms = (
             sum(inference_times)
@@ -2451,7 +2448,7 @@ def bypass_status():
         lost_at=bypass_connection_lost_at
     with state_lock:
         relays=list(state.get("fans", [False]*4)) + [bool(state.get("led",False))] + list(state.get("heaters",[False]*2))[:1]
-    return jsonify(active=not bypass_paused,maintenanceAuthenticated=True,manualControlsPaused=bypass_paused,connectionLostAt=lost_at,expiresSeconds=remaining,overrides=overrides,readings=readings,readingsUpdatedAt=readings_at,relays=relays,simulation=simulation_snapshot(),manualStageHistory=_manual_history()[-5:],schedule=current_schedule_status(),trough=_trough_status())
+    return jsonify(active=not bypass_paused,maintenanceAuthenticated=True,manualControlsPaused=bypass_paused,connectionLostAt=lost_at,expiresSeconds=remaining,overrides=overrides,readings=readings,readingsUpdatedAt=readings_at,relays=relays,simulation=simulation_snapshot(),manualStageHistory=_manual_history()[-5:],stageSession=stage_session_snapshot(),schedule=current_schedule_status(),trough=_trough_status())
 
 STAGE_MANUAL_PATH = Path(__file__).with_name("stage_manual.json")
 STAGE_MANUAL_HISTORY = 20
@@ -2465,40 +2462,43 @@ def _manual_history():
         return []
 
 
-@app.route("/api/bypass/confirm-stage", methods=["POST"])
-def bypass_confirm_stage():
-    """Owner sets the real stage by hand (any direction). The Arduino stage
-    changes; the AI's own fields are not touched (SPEC-stage-schedule §9)."""
-    if not bypass_authorized():
-        return jsonify(error="Unauthorized"), 403
-    target = str((request.get_json(silent=True) or {}).get("stage") or "").strip().upper()
-    if target not in stage_schedule.STAGES:
-        return jsonify(error="Stage must be STARTER, GROWER or FINISHER"), 400
-    with state_lock:
-        current = str(state.get("stage") or "").strip().upper()
-        online = arduino_online_locked()
-    if not online:
-        return jsonify(error="Arduino offline; the stage was not changed"), 503
-    if target == current:
-        return jsonify(success=True, stage=target, changed=False)
-    with feeding_lock:
-        if feeding_pending is not None or any(g.get("status") == "DISPENSING" for g in feeding_gates.values()):
-            return jsonify(error="Feed is being dispensed; try again when it finishes"), 409
-    if not send_command("STAGE:" + target):
-        return jsonify(error="Unable to send the stage to the Arduino"), 503
-    deadline = time.monotonic() + AI_STAGE_ACK_TIMEOUT_SECONDS
-    observed = current
-    while time.monotonic() < deadline:
-        with state_lock:
-            observed = str(state.get("stage") or "").strip().upper()
-        if observed == target:
-            break
-        time.sleep(0.1)
-    if observed != target:
-        return jsonify(error="Arduino did not confirm the new stage"), 504
-    # A new stage starts a fresh AI candidate; status stays neutral.
-    reset_transition_candidate("idle")
-    entry = {"at": utc_timestamp(), "from": current or None, "to": target, "by": request_user()}
+# Maintenance vote simulator (owner, 2026-11-24). Confirm stage on the
+# maintenance site submits the chosen number of votes for the chosen stage
+# into the same 30-second vote as the camera: the same lock (never at the same
+# time as a camera cycle), the same live ai_state fields, the same tally
+# (ai_votes.tally) and the same stage hand-off to the Arduino. The result is
+# tagged ai_votes.SOURCE_SIMULATED in ai_state and in the history database.
+# No camera image, model confidence or camera AI record is created or changed.
+stage_session_lock = threading.Lock()
+stage_session = {"id": 0, "status": "idle", "stage": None, "votes": None, "submitted": 0,
+                 "from": None, "result": None, "error": None, "startedAt": None, "finishedAt": None}
+# The vote/result fields a session replaces; restored if it is cancelled.
+AI_RESULT_FIELDS = ("status", "detectedStage", "confidence", "confident", "lastInference", "inferenceTimeMs",
+                    "cycleDuration", "framesAnalyzed", "failedFrames", "votes", "error", "source", "framesExpected")
+STAGE_HANDOFF_ERRORS = {
+    "feeding_active_retry_after_next_cycle": "Feed was being dispensed; the stage was not changed",
+    "hardware_busy_or_offline": "Arduino offline; the stage was not changed",
+    "send_failed": "Unable to send the stage to the Arduino",
+    "ack_timeout": "Arduino did not confirm the new stage",
+}
+
+
+def stage_session_snapshot():
+    with stage_session_lock:
+        return dict(stage_session)
+
+
+class VoteSessionCancelled(Exception):
+    pass
+
+
+def stage_session_token_valid(token):
+    # A session ends with the maintenance login that started it.
+    with bypass_lock:
+        return bool(token) and bypass_token == token and time.monotonic() < bypass_expires
+
+
+def record_stage_session(entry):
     history = (_manual_history() + [entry])[-STAGE_MANUAL_HISTORY:]
     try:
         tmp = STAGE_MANUAL_PATH.with_name(STAGE_MANUAL_PATH.name + ".tmp")
@@ -2506,9 +2506,138 @@ def bypass_confirm_stage():
         os.replace(tmp, STAGE_MANUAL_PATH)
     except OSError as error:
         print(f"[SCHEDULE] Could not save manual stage history: {error}", flush=True)
-    print(f"[AUDIT] manual stage {current or '-'} -> {target} by {request_user()}", flush=True)
-    return jsonify(success=True, stage=target, changed=True, previous=current or None,
-                   schedule=current_schedule_status())
+
+
+def run_simulated_vote_session(target, vote_count, token, user):
+    """Runs in its own thread and owns ai_cycle_lock (taken by the route)."""
+    stage_name = target.title()
+    votes = ai_votes.empty_votes()
+    offsets = ai_votes.vote_offsets(vote_count, AI_CYCLE_DURATION_SECONDS)
+    with ai_state_lock:
+        previous = {key: (dict(ai_state[key]) if isinstance(ai_state.get(key), dict) else ai_state.get(key))
+                    for key in AI_RESULT_FIELDS}
+    with state_lock:
+        start_stage = str(state.get("stage") or "").strip().upper()
+    result, error, applied_to = None, None, None
+    try:
+        with stage_session_lock:
+            stage_session["status"] = "voting"
+            stage_session["from"] = start_stage or None
+        with ai_state_lock:
+            ai_state.update(status="classifying", cycleRunning=True, framesAnalyzed=0, failedFrames=0,
+                            votes=dict(votes), error=None, source=ai_votes.SOURCE_SIMULATED,
+                            framesExpected=vote_count)
+        print(f"[BYPASS] vote session: {vote_count} votes for {target} by {user}", flush=True)
+        cycle_start = time.monotonic()
+        deadline = cycle_start + AI_CYCLE_DURATION_SECONDS
+        submitted = 0
+        # Same 30 s window as a camera cycle; votes are published as they land.
+        while True:
+            if not stage_session_token_valid(token):
+                raise VoteSessionCancelled()
+            now = time.monotonic()
+            due = submitted
+            while due < vote_count and now - cycle_start >= offsets[due]:
+                due += 1
+            if due != submitted:
+                votes[stage_name] += due - submitted
+                submitted = due
+                with ai_state_lock:
+                    ai_state["votes"] = dict(votes)
+                    ai_state["framesAnalyzed"] = submitted
+                with stage_session_lock:
+                    stage_session["submitted"] = submitted
+            if now >= deadline and submitted == vote_count:
+                break
+            time.sleep(0.05)
+        outcome = ai_votes.tally(votes, None, AI_MIN_CONFIDENCE, AI_MIN_VALID_FRAMES,
+                                 AI_MIN_WINNING_VOTE_FRACTION)
+        with ai_state_lock:
+            ai_state.update(detectedStage=outcome["stage"], confidence=None, confident=outcome["confident"],
+                            lastInference=utc_timestamp(), inferenceTimeMs=None,
+                            cycleDuration=round(time.monotonic() - cycle_start, 1),
+                            framesAnalyzed=outcome["frames"], failedFrames=0, votes=dict(votes),
+                            status=outcome["status"], error=None)
+        with state_lock:
+            current = str(state.get("stage") or "").strip().upper()
+        if not outcome["confident"]:
+            # Too few votes for the vote rules: like an unconfident camera
+            # cycle, the stage is not changed.
+            result = "not_confirmed"
+        elif outcome["stage"].upper() == current:
+            result, applied_to = "unchanged", current
+        else:
+            with stage_session_lock:
+                stage_session["status"] = "applying"
+            hardware = apply_confirmed_stage_to_arduino(outcome["stage"], owner=True)
+            if hardware.get("success"):
+                # A new stage starts a fresh scheduled AI candidate.
+                reset_transition_candidate("applied")
+                result, applied_to = "applied", hardware.get("to")
+                print(f"[AUDIT] stage {current or '-'} -> {applied_to} by {user} "
+                      f"(maintenance vote session, {vote_count} votes)", flush=True)
+            else:
+                status = hardware.get("status") or "failed"
+                result, error = "failed", STAGE_HANDOFF_ERRORS.get(status, status)
+    except VoteSessionCancelled:
+        with ai_state_lock:
+            ai_state.update(previous)
+        result, error = "cancelled", "Maintenance session ended; the vote was discarded"
+    except Exception as exc:  # never leave a half-finished vote on screen
+        with ai_state_lock:
+            ai_state.update(previous)
+        result, error = "failed", str(exc)
+    finally:
+        with ai_state_lock:
+            ai_state["cycleRunning"] = False
+        ai_cycle_lock.release()
+        with stage_session_lock:
+            stage_session.update(status=result or "failed", result=result or "failed", error=error,
+                                 finishedAt=utc_timestamp())
+            finished_at = stage_session["finishedAt"]
+    if result != "cancelled":
+        record_stage_session({"at": finished_at, "from": start_stage or None, "to": applied_to, "by": user,
+                              "source": ai_votes.SOURCE_SIMULATED, "stage": target, "votes": vote_count,
+                              "result": result, "error": error})
+    print(f"[BYPASS] vote session {target} x{vote_count}: {result}" + (f" ({error})" if error else ""), flush=True)
+
+
+@app.route("/api/bypass/confirm-stage", methods=["POST"])
+def bypass_confirm_stage():
+    """Owner confirms a stage (any direction) by submitting simulated votes to
+    the 30-second AI vote (run_simulated_vote_session). Returns 202 at once;
+    progress is in /api/bypass/status (stageSession)."""
+    if not bypass_authorized():
+        return jsonify(error="Unauthorized"), 403
+    body = request.get_json(silent=True) or {}
+    target = str(body.get("stage") or "").strip().upper()
+    if target not in stage_schedule.STAGES:
+        return jsonify(error="Stage must be STARTER, GROWER or FINISHER"), 400
+    try:
+        vote_count = ai_votes.parse_vote_count(body.get("votes"))
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    with state_lock:
+        online = arduino_online_locked()
+    if not online:
+        return jsonify(error="Arduino offline; no vote was started"), 503
+    if not ai_cycle_lock.acquire(blocking=False):
+        return jsonify(error="A 30-second vote is already running; try again when it finishes", busy=True), 409
+    try:
+        with bypass_lock:
+            token = bypass_token
+        user = request_user()
+        with stage_session_lock:
+            stage_session.update(id=stage_session["id"] + 1, status="starting", stage=target, votes=vote_count,
+                                 submitted=0, result=None, error=None, startedAt=utc_timestamp(), finishedAt=None)
+            stage_session["from"] = None
+        threading.Thread(target=run_simulated_vote_session, args=(target, vote_count, token, user),
+                         daemon=True).start()
+    except Exception:
+        ai_cycle_lock.release()
+        raise
+    return jsonify(success=True, started=True, seconds=AI_CYCLE_DURATION_SECONDS,
+                   session=stage_session_snapshot()), 202
 
 
 def _trough_status():
@@ -3920,6 +4049,10 @@ def _history_connection():
     conn.execute("""CREATE TABLE IF NOT EXISTS ai_checks (
         id INTEGER PRIMARY KEY AUTOINCREMENT, recorded_at TEXT NOT NULL,
         detected_stage TEXT, confidence_pct REAL, status TEXT)""")
+    # Where each check came from (ai_votes.SOURCE_*). Added in place; rows from
+    # before the column existed are camera checks (source NULL).
+    if not any(row[1] == "source" for row in conn.execute("PRAGMA table_info(ai_checks)")):
+        conn.execute("ALTER TABLE ai_checks ADD COLUMN source TEXT")
     conn.execute("""CREATE TABLE IF NOT EXISTS system_events (
         id INTEGER PRIMARY KEY AUTOINCREMENT, recorded_at TEXT NOT NULL,
         event_type TEXT NOT NULL, detail TEXT)""")
@@ -3972,8 +4105,9 @@ def history_worker():
         if inference and inference != _history_last_ai:
             _history_last_ai = inference
             _history_insert("ai_checks",
-                ["recorded_at","detected_stage","confidence_pct","status"],
-                [inference, ai.get("detectedStage"), _history_finite(ai.get("confidence")), ai.get("status")])
+                ["recorded_at","detected_stage","confidence_pct","status","source"],
+                [inference, ai.get("detectedStage"), _history_finite(ai.get("confidence")), ai.get("status"),
+                 ai.get("source") or ai_votes.SOURCE_CAMERA])
 
 _original_process_message = process_message
 def process_message(message):

@@ -23,13 +23,25 @@ type BypassStatus = {
   readings?: Partial<Record<SensorKey, number | null>>;
   simulation?: { active?: boolean; stage?: string; framesAnalyzed?: number; confidence?: number | null };
   schedule?: StageSchedule;
-  manualStageHistory?: { at: string; from: string | null; to: string }[];
+  manualStageHistory?: { at: string; from: string | null; to: string | null; stage?: string; votes?: number; result?: string; error?: string | null }[];
+  stageSession?: { id: number; status: string; stage: string | null; votes: number | null; submitted: number; result: string | null; error: string | null; startedAt: string | null; finishedAt: string | null };
   trough?: {
     raw: number | null; zeroRaw: number | null; countsPerGram: number | null; zeroAt: string | null; checkedAt: string | null;
     commissioned: boolean; grams: number | null; reading: { valid: boolean; grams: number | null; reason: string | null };
   };
 };
 const STAGES = ["STARTER", "GROWER", "FINISHER"] as const;
+// Must match raspberry-pi/ai_votes.py (SIM_VOTES_MIN / SIM_VOTES_MAX / SIM_VOTES_DEFAULT).
+const VOTES_MIN = 1;
+const VOTES_MAX = 300;
+const VOTES_DEFAULT = 30;
+const MIN_VALID_VOTES = 10; // AI_MIN_VALID_FRAMES on the Pi
+const SESSION_TEXT: Record<string, string> = {
+  starting: "Starting…", voting: "Voting", applying: "Sending the stage to the Arduino…",
+  applied: "Stage applied", unchanged: "Stage already matched", not_confirmed: "Not confirmed (too few votes)",
+  failed: "Failed", cancelled: "Cancelled",
+};
+const validVotes = (value: string) => /^\d+$/.test(value.trim()) && Number(value) >= VOTES_MIN && Number(value) <= VOTES_MAX;
 const title = (stage: string | null | undefined) => (stage ? stage.charAt(0) + stage.slice(1).toLowerCase() : "—");
 type Snapshot = {
   status?: {
@@ -56,6 +68,7 @@ export function Console() {
   const [seconds, setSeconds] = useState("0.5");
   const [values, setValues] = useState<Record<SensorKey, string>>({ temperature: "", ldr: "", hopper: "", trough: "" });
   const [relayState, setRelayState] = useState<Record<number, boolean>>({});
+  const [voteCount, setVoteCount] = useState(String(VOTES_DEFAULT));
 
   function clearSession(note?: string) {
     setToken("");
@@ -96,11 +109,13 @@ export function Console() {
   }
 
   async function confirmStage(target: (typeof STAGES)[number]) {
-    if (!window.confirm(`Set the house to ${title(target)}? Temperature and lighting change immediately.`)) return;
+    if (!validVotes(voteCount)) { setMessage(`Votes must be a whole number from ${VOTES_MIN} to ${VOTES_MAX}.`); return; }
+    const votes = Number(voteCount);
+    if (!window.confirm(`Submit ${votes} votes for ${title(target)} to the 30-second AI vote?\n\nIf the vote confirms it, the house switches to ${title(target)} when the vote ends: temperature and lighting change then.`)) return;
     setBusy(true);
     try {
-      const result = await call<{ changed?: boolean; previous?: string | null }>("confirm-stage", { stage: target });
-      setMessage(result.changed ? `Stage set to ${title(target)} (was ${title(result.previous)}). The Arduino confirmed it.` : `The house is already on ${title(target)}.`);
+      const result = await call<{ seconds?: number }>("confirm-stage", { stage: target, votes });
+      setMessage(`Vote started: ${votes} votes for ${title(target)} over ${result.seconds ?? 30} s. The result appears below and in the app when it ends.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
       if (sessionExpired(error)) clearSession();
@@ -290,15 +305,35 @@ export function Console() {
                     {schedule && schedule.overdueDays > 0 && (
                       <p className="mb-2 text-sm text-warn">{title(schedule.overdueStage)} not confirmed by the AI for {schedule.overdueDays} day{schedule.overdueDays === 1 ? "" : "s"}.</p>
                     )}
-                    <p className="mb-3 text-xs text-muted-foreground">Sets the real stage on the Arduino (any stage, also backwards). The app shows it as the confirmed stage. The AI then continues from this stage, forward only.</p>
-                    <div className="flex flex-wrap gap-2">
-                      {STAGES.map((value) => (
-                        <button key={value} className={btn} disabled={busy || current === value} onClick={() => void confirmStage(value)}>
-                          {current === value ? `${title(value)} (current)` : `Set ${title(value)}`}
-                        </button>
-                      ))}
-                      <button className={btn} disabled={busy || !active} onClick={() => void perform("analyse-real")}>Analyse real stage (camera check)</button>
-                    </div>
+                    <p className="mb-3 text-xs text-muted-foreground">Submits test votes for the stage to the same 30-second AI vote the camera uses; the app shows the result as an AI result. If the vote confirms it, the stage is set on the Arduino (any stage, also backwards) when the 30 seconds end. The AI then continues from this stage, forward only. Test votes are recorded as simulated; no camera image or confidence is created.</p>
+                    {(() => {
+                      const session = status?.stageSession;
+                      const running = !!session && ["starting", "voting", "applying"].includes(session.status);
+                      return (
+                        <>
+                          <label className="mb-3 block max-w-xs text-sm">Votes for the stage ({VOTES_MIN}–{VOTES_MAX})
+                            <input type="number" min={VOTES_MIN} max={VOTES_MAX} step="1" className={inputClass + " mt-1"} value={voteCount} onChange={(event) => setVoteCount(event.target.value)} />
+                          </label>
+                          {!validVotes(voteCount) && <p className="mb-2 text-xs text-danger">Enter a whole number from {VOTES_MIN} to {VOTES_MAX}.</p>}
+                          {validVotes(voteCount) && Number(voteCount) < MIN_VALID_VOTES && <p className="mb-2 text-xs text-warn">Fewer than {MIN_VALID_VOTES} votes never confirms a stage (same rule as the camera).</p>}
+                          {session && session.status !== "idle" && (
+                            <p role="status" className="mb-3 text-sm">
+                              <span className="font-semibold">{SESSION_TEXT[session.status] ?? session.status}</span>
+                              {" · "}{title(session.stage)} · <span className="tabular-nums">{session.submitted}/{session.votes ?? "—"}</span> votes
+                              {session.error ? ` · ${session.error}` : ""}
+                            </p>
+                          )}
+                          <div className="flex flex-wrap gap-2">
+                            {STAGES.map((value) => (
+                              <button key={value} className={btn} disabled={busy || running || !validVotes(voteCount)} onClick={() => void confirmStage(value)}>
+                                {current === value ? `Vote ${title(value)} (current)` : `Vote ${title(value)}`}
+                              </button>
+                            ))}
+                            <button className={btn} disabled={busy || running || !active} onClick={() => void perform("analyse-real")}>Analyse real stage (camera check)</button>
+                          </div>
+                        </>
+                      );
+                    })()}
                     {(() => {
                       // The real AI result, always (the main app shows a detection only when it agrees with the confirmed stage).
                       const ai = snapshot?.ai;
@@ -306,7 +341,7 @@ export function Console() {
                       const last = schedule?.lastAttempt;
                       return (
                         <div className="mt-4 rounded-lg border p-3 text-sm">
-                          <p className="font-semibold">Real AI detection</p>
+                          <p className="font-semibold">{ai?.source === "bypass_simulation" ? "AI vote result (test votes from this site)" : "Real AI detection"}</p>
                           <p className="mt-1">
                             {ai?.detectedStage ? `${title(ai.detectedStage.toUpperCase())}${typeof ai.confidence === "number" ? ` · ${ai.confidence.toFixed(1)}%` : ""}` : "No result yet"}
                             {ai?.lastInference ? ` · ${new Date(ai.lastInference).toLocaleString()}` : ""}
@@ -331,7 +366,11 @@ export function Console() {
                     {!!status?.manualStageHistory?.length && (
                       <ul className="mt-3 space-y-1 text-xs text-muted-foreground">
                         {status.manualStageHistory.slice().reverse().map((entry) => (
-                          <li key={entry.at}>{new Date(entry.at).toLocaleString()}: {title(entry.from)} → {title(entry.to)} (set here)</li>
+                          <li key={entry.at}>
+                            {new Date(entry.at).toLocaleString()}: {entry.votes != null
+                              ? `${entry.votes} test votes for ${title(entry.stage)} · ${SESSION_TEXT[entry.result ?? ""] ?? entry.result ?? "—"}${entry.result === "applied" ? ` (${title(entry.from)} → ${title(entry.to)})` : ""}${entry.error ? ` · ${entry.error}` : ""}`
+                              : `${title(entry.from)} → ${title(entry.to)} (set here)`}
+                          </li>
                         ))}
                       </ul>
                     )}

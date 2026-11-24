@@ -31,6 +31,7 @@ function AIPage(){const {data:ai,error,busy,classify}=useAI();const {data:hw}=us
     const running = agrees && Boolean(ai?.cycleRunning);
     const failed = Number(ai?.failedFrames ?? 0);
     const processed = Number(ai?.framesAnalyzed ?? 0) + failed;
+    const expected = typeof ai?.framesExpected === "number" && ai.framesExpected > 0 ? ai.framesExpected : 30;
     return (total > 0 || running) ? (
       <div className="space-y-4">
         {names.map((name, index) => (
@@ -42,8 +43,8 @@ function AIPage(){const {data:ai,error,busy,classify}=useAI();const {data:hw}=us
           </div>
         ))}
         <div className="space-y-2 rounded-lg bg-surface p-3">
-          <div className="flex justify-between text-sm font-medium"><span>{running ? "Analyzing images live" : "Latest completed analysis"}</span><span className="tabular-nums">{Math.min(processed,30)}/30 images analyzed</span></div>
-          <div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full bg-emerald-700 transition-all duration-300" style={{width:`${Math.min(100,processed/30*100)}%`}} /></div>
+          <div className="flex justify-between text-sm font-medium"><span>{running ? "Analyzing images live" : "Latest completed analysis"}</span><span className="tabular-nums">{Math.min(processed,expected)}/{expected} images analyzed</span></div>
+          <div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full bg-emerald-700 transition-all duration-300" style={{width:`${Math.min(100,processed/expected*100)}%`}} /></div>
           <p className="text-xs text-muted-foreground">{total} valid votes{failed ? ` · ${failed} failed images` : ""}{running ? " · updating every second" : ""}</p>
         </div>
       </div>
