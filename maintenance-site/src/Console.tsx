@@ -24,6 +24,7 @@ type BypassStatus = {
   simulation?: { active?: boolean; stage?: string; framesAnalyzed?: number; confidence?: number | null };
   schedule?: StageSchedule;
   manualStageHistory?: { at: string; from: string | null; to: string | null; stage?: string; votes?: number; result?: string; error?: string | null }[];
+  stagePreset?: { stage: string; votes: number; setAt: string; by: string } | null;
   stageSession?: { id: number; status: string; stage: string | null; votes: number | null; submitted: number; result: string | null; error: string | null; startedAt: string | null; finishedAt: string | null };
   trough?: {
     raw: number | null; zeroRaw: number | null; countsPerGram: number | null; zeroAt: string | null; checkedAt: string | null;
@@ -108,14 +109,15 @@ export function Console() {
     } finally { setBusy(false); }
   }
 
-  async function confirmStage(target: (typeof STAGES)[number]) {
-    if (!validVotes(voteCount)) { setMessage(`Votes must be a whole number from ${VOTES_MIN} to ${VOTES_MAX}.`); return; }
+  async function savePreset(target: (typeof STAGES)[number] | null) {
+    if (target && !validVotes(voteCount)) { setMessage(`Votes must be a whole number from ${VOTES_MIN} to ${VOTES_MAX}.`); return; }
     const votes = Number(voteCount);
-    if (!window.confirm(`Submit ${votes} votes for ${title(target)} to the 30-second AI vote?\n\nIf the vote confirms it, the house switches to ${title(target)} when the vote ends: temperature and lighting change then.`)) return;
     setBusy(true);
     try {
-      const result = await call<{ seconds?: number }>("confirm-stage", { stage: target, votes });
-      setMessage(`Vote started: ${votes} votes for ${title(target)} over ${result.seconds ?? 30} s. The result appears below and in the app when it ends.`);
+      await call("stage-preset", target ? { stage: target, votes } : { clear: true });
+      setMessage(target
+        ? `Preset saved: ${votes} votes for ${title(target)}. The next Camera check in the app runs the 30-second vote with it; if the votes confirm it, the house switches to ${title(target)}.`
+        : "Preset cleared. Camera checks in the app use the camera again.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
       if (sessionExpired(error)) clearSession();
@@ -305,7 +307,7 @@ export function Console() {
                     {schedule && schedule.overdueDays > 0 && (
                       <p className="mb-2 text-sm text-warn">{title(schedule.overdueStage)} not confirmed by the AI for {schedule.overdueDays} day{schedule.overdueDays === 1 ? "" : "s"}.</p>
                     )}
-                    <p className="mb-3 text-xs text-muted-foreground">Submits test votes for the stage to the same 30-second AI vote the camera uses; the app shows the result as an AI result. If the vote confirms it, the stage is set on the Arduino (any stage, also backwards) when the 30 seconds end. The AI then continues from this stage, forward only. Test votes are recorded as simulated; no camera image or confidence is created.</p>
+                    <p className="mb-3 text-xs text-muted-foreground">Save a stage and a number of votes. While maintenance is unlocked, each Camera check on the app's AI Growth Stage page runs the same 30-second AI vote with these votes instead of the camera, and the app shows the result as an AI result. If the votes confirm the stage, it is set on the Arduino (any stage, also backwards) when the 30 seconds end. The preset ends when you clear it, Return to automatic, Exit, or the session expires. Daily AI checks and Analyse real stage always use the camera. Test votes are recorded as simulated; no camera image or confidence is created.</p>
                     {(() => {
                       const session = status?.stageSession;
                       const running = !!session && ["starting", "voting", "applying"].includes(session.status);
@@ -316,6 +318,11 @@ export function Console() {
                           </label>
                           {!validVotes(voteCount) && <p className="mb-2 text-xs text-danger">Enter a whole number from {VOTES_MIN} to {VOTES_MAX}.</p>}
                           {validVotes(voteCount) && Number(voteCount) < MIN_VALID_VOTES && <p className="mb-2 text-xs text-warn">Fewer than {MIN_VALID_VOTES} votes never confirms a stage (same rule as the camera).</p>}
+                          <p className="mb-3 text-sm">
+                            {status?.stagePreset
+                              ? <>Stored preset: <span className="font-semibold">{title(status.stagePreset.stage)} · {status.stagePreset.votes} votes</span> (used by the next Camera check in the app)</>
+                              : "No preset stored: Camera checks in the app use the camera."}
+                          </p>
                           {session && session.status !== "idle" && (
                             <p role="status" className="mb-3 text-sm">
                               <span className="font-semibold">{SESSION_TEXT[session.status] ?? session.status}</span>
@@ -325,10 +332,11 @@ export function Console() {
                           )}
                           <div className="flex flex-wrap gap-2">
                             {STAGES.map((value) => (
-                              <button key={value} className={btn} disabled={busy || running || !validVotes(voteCount)} onClick={() => void confirmStage(value)}>
-                                {current === value ? `Vote ${title(value)} (current)` : `Vote ${title(value)}`}
+                              <button key={value} className={btn} disabled={busy || !active || !validVotes(voteCount)} onClick={() => void savePreset(value)}>
+                                {`Preset ${title(value)}${current === value ? " (current)" : ""}`}
                               </button>
                             ))}
+                            <button className={btn} disabled={busy || !status?.stagePreset} onClick={() => void savePreset(null)}>Clear preset</button>
                             <button className={btn} disabled={busy || running || !active} onClick={() => void perform("analyse-real")}>Analyse real stage (camera check)</button>
                           </div>
                         </>

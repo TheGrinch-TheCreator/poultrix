@@ -77,7 +77,8 @@ class VoteCount(unittest.TestCase):
 
 FUNCTIONS = {"stage_session_snapshot", "stage_session_token_valid", "record_stage_session",
              "run_simulated_vote_session", "apply_confirmed_stage_to_arduino", "reset_transition_candidate",
-             "_manual_history"}
+             "_manual_history", "active_stage_preset", "stage_preset_snapshot", "clear_stage_preset",
+             "run_preset_camera_check"}
 NAMES = {"AI_RESULT_FIELDS", "STAGE_HANDOFF_ERRORS"}
 CLASSES = {"VoteSessionCancelled"}
 WINDOW = 0.4  # seconds, instead of 30
@@ -118,7 +119,7 @@ class FakePi:
             "STAGE_MANUAL_PATH": pathlib.Path(self.tmp.name) / "stage_manual.json", "STAGE_MANUAL_HISTORY": 20,
             "utc_timestamp": lambda: time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()) + f".{time.monotonic_ns()}",
             "send_command": self.send_command, "print": lambda *a, **k: None,
-            "stage_session_lock": threading.Lock(),
+            "stage_session_lock": threading.Lock(), "stage_preset_lock": threading.Lock(), "stage_preset": None,
             "stage_session": {"id": 0, "status": "idle", "stage": None, "votes": None, "submitted": 0, "from": None,
                               "result": None, "error": None, "startedAt": None, "finishedAt": None},
         }
@@ -269,6 +270,74 @@ class VoteSession(unittest.TestCase):
         self.assertEqual(pi.sent, [])
 
 
+class PresetCameraCheck(unittest.TestCase):
+    """Main-app Camera check while a maintenance preset is stored."""
+
+    def setUp(self):
+        self.pi = FakePi(stage="GROWER")
+
+    def tearDown(self):
+        self.pi.close()
+
+    def store(self, stage, votes):
+        self.pi.ns["stage_preset"] = {"stage": stage, "votes": votes, "setAt": "t", "by": "ip:test", "token": "tok"}
+
+    def check(self):
+        preset = self.pi.ns["active_stage_preset"]()
+        self.assertIsNotNone(preset)
+        return self.pi.ns["run_preset_camera_check"](preset, "owner@example")
+
+    def test_preset_runs_the_vote_and_applies_the_stage(self):
+        self.store("FINISHER", 80)
+        result = self.check()
+        self.assertTrue(result["success"])
+        self.assertEqual((result["detectedStage"], result["confident"], result["status"], result["confidence"]),
+                         ("Finisher", True, "ready", None))
+        self.assertEqual(result["votes"], {"Starter": 0, "Grower": 0, "Finisher": 80})
+        self.assertEqual(result["framesAnalyzed"], 80)
+        self.assertEqual(result["transition"]["status"], "applied")
+        self.assertEqual(self.pi.ns["state"]["stage"], "FINISHER")
+        entry = self.pi.history()[-1]
+        self.assertEqual((entry["trigger"], entry["by"], entry["source"]), ("camera_check", "owner@example", av.SOURCE_SIMULATED))
+        self.assertFalse(self.pi.ns["ai_cycle_lock"].locked())
+
+    def test_preset_stays_for_every_check_until_cleared(self):
+        self.store("GROWER", 40)
+        for _ in range(2):
+            self.assertEqual(self.check()["transition"]["status"], "unchanged")
+        self.pi.ns["clear_stage_preset"]()
+        self.assertIsNone(self.pi.ns["active_stage_preset"]())
+
+    def test_preset_ends_with_the_maintenance_login(self):
+        self.store("FINISHER", 80)
+        self.pi.ns["bypass_token"] = None  # Exit bypass
+        self.assertIsNone(self.pi.ns["active_stage_preset"]())
+        self.store("FINISHER", 80)
+        self.pi.ns["bypass_token"] = "tok"
+        self.pi.ns["bypass_expires"] = time.monotonic() - 1  # session expired
+        self.assertIsNone(self.pi.ns["active_stage_preset"]())
+
+    def test_snapshot_hides_the_token(self):
+        self.store("STARTER", 30)
+        snap = self.pi.ns["stage_preset_snapshot"]()
+        self.assertEqual((snap["stage"], snap["votes"]), ("STARTER", 30))
+        self.assertNotIn("token", snap)
+
+    def test_busy_while_another_cycle_runs(self):
+        self.store("FINISHER", 80)
+        self.pi.ns["ai_cycle_lock"].acquire()
+        result = self.check()
+        self.assertEqual((result["success"], result.get("busy")), (False, True))
+        self.pi.ns["ai_cycle_lock"].release()
+        self.assertEqual(self.pi.ns["state"]["stage"], "GROWER")
+
+
+def function_body(src, name):
+    """Source of one top-level function in app.py."""
+    node = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name == name)
+    return ast.get_source_segment(src, node)
+
+
 class AppWiring(unittest.TestCase):
     """Static checks on app.py for the parts the fake can't run."""
 
@@ -281,11 +350,26 @@ class AppWiring(unittest.TestCase):
         self.assertIn("remember_agreeing_detection(", cycle)
 
     def test_simulated_results_never_feed_camera_records(self):
-        session = self.src[self.src.index("def run_simulated_vote_session("):self.src.index('@app.route("/api/bypass/confirm-stage"')]
+        session = function_body(self.src, "run_simulated_vote_session")
         self.assertNotIn("remember_agreeing_detection", session)
         self.assertNotIn("classify_current_frame", session)
         self.assertIn("(source IS NULL OR source = ?)", self.src)
         self.assertIn('ai.get("source") or ai_votes.SOURCE_CAMERA', self.src)
+
+    def test_camera_check_uses_preset_only_when_stored(self):
+        route = self.src[self.src.index("def manual_ai_classification("):self.src.index("# API: MODE SWITCHING")]
+        self.assertIn("preset = active_stage_preset()", route)
+        self.assertIn("run_preset_camera_check(preset, request_user())", route)
+        self.assertIn("else run_ai_cycle()", route)
+        # Scheduled daily checks and maintenance "Analyse real stage" stay on the camera.
+        for name in ("run_scheduled_check", "bypass_analyse_real"):
+            body = function_body(self.src, name)
+            self.assertIn("run_ai_cycle(", body)
+            self.assertNotIn("preset", body)
+
+    def test_preset_cleared_when_maintenance_ends(self):
+        for name in ("bypass_return_live", "bypass_shutdown"):
+            self.assertIn("clear_stage_preset()", function_body(self.src, name), name)
 
     def test_stage_constants_match(self):
         self.assertEqual(tuple(s.title() for s in ss.STAGES), av.STAGE_NAMES)

@@ -2293,6 +2293,7 @@ def bypass_shutdown():
     with bypass_lock:
         for key in sim_readings: sim_readings[key] = None
     simulation_clear()
+    clear_stage_preset()
 
 def bypass_watchdog():
     while True:
@@ -2448,7 +2449,7 @@ def bypass_status():
         lost_at=bypass_connection_lost_at
     with state_lock:
         relays=list(state.get("fans", [False]*4)) + [bool(state.get("led",False))] + list(state.get("heaters",[False]*2))[:1]
-    return jsonify(active=not bypass_paused,maintenanceAuthenticated=True,manualControlsPaused=bypass_paused,connectionLostAt=lost_at,expiresSeconds=remaining,overrides=overrides,readings=readings,readingsUpdatedAt=readings_at,relays=relays,simulation=simulation_snapshot(),manualStageHistory=_manual_history()[-5:],stageSession=stage_session_snapshot(),schedule=current_schedule_status(),trough=_trough_status())
+    return jsonify(active=not bypass_paused,maintenanceAuthenticated=True,manualControlsPaused=bypass_paused,connectionLostAt=lost_at,expiresSeconds=remaining,overrides=overrides,readings=readings,readingsUpdatedAt=readings_at,relays=relays,simulation=simulation_snapshot(),manualStageHistory=_manual_history()[-5:],stageSession=stage_session_snapshot(),stagePreset=stage_preset_snapshot(),schedule=current_schedule_status(),trough=_trough_status())
 
 STAGE_MANUAL_PATH = Path(__file__).with_name("stage_manual.json")
 STAGE_MANUAL_HISTORY = 20
@@ -2462,11 +2463,11 @@ def _manual_history():
         return []
 
 
-# Maintenance vote simulator (owner, 2026-11-24). Confirm stage on the
-# maintenance site submits the chosen number of votes for the chosen stage
-# into the same 30-second vote as the camera: the same lock (never at the same
-# time as a camera cycle), the same live ai_state fields, the same tally
-# (ai_votes.tally) and the same stage hand-off to the Arduino. The result is
+# Maintenance vote simulator (owner, 2026-11-24). The maintenance site stores
+# a preset (stage + number of votes); the main app's Camera check then submits
+# those votes into the same 30-second vote as the camera: the same lock (never
+# at the same time as a camera cycle), the same live ai_state fields, the same
+# tally (ai_votes.tally) and the same stage hand-off to the Arduino. The result is
 # tagged ai_votes.SOURCE_SIMULATED in ai_state and in the history database.
 # No camera image, model confidence or camera AI record is created or changed.
 stage_session_lock = threading.Lock()
@@ -2509,7 +2510,9 @@ def record_stage_session(entry):
 
 
 def run_simulated_vote_session(target, vote_count, token, user):
-    """Runs in its own thread and owns ai_cycle_lock (taken by the route)."""
+    """One 30-second vote with simulated votes instead of camera frames.
+    The caller holds ai_cycle_lock; it is released here. Returns
+    {"result", "error", "outcome"} (outcome is None if no vote finished)."""
     stage_name = target.title()
     votes = ai_votes.empty_votes()
     offsets = ai_votes.vote_offsets(vote_count, AI_CYCLE_DURATION_SECONDS)
@@ -2518,16 +2521,17 @@ def run_simulated_vote_session(target, vote_count, token, user):
                     for key in AI_RESULT_FIELDS}
     with state_lock:
         start_stage = str(state.get("stage") or "").strip().upper()
-    result, error, applied_to = None, None, None
+    result, error, applied_to, outcome = None, None, None, None
     try:
         with stage_session_lock:
-            stage_session["status"] = "voting"
+            stage_session.update(id=stage_session["id"] + 1, status="voting", stage=target, votes=vote_count,
+                                 submitted=0, result=None, error=None, startedAt=utc_timestamp(), finishedAt=None)
             stage_session["from"] = start_stage or None
         with ai_state_lock:
             ai_state.update(status="classifying", cycleRunning=True, framesAnalyzed=0, failedFrames=0,
                             votes=dict(votes), error=None, source=ai_votes.SOURCE_SIMULATED,
                             framesExpected=vote_count)
-        print(f"[BYPASS] vote session: {vote_count} votes for {target} by {user}", flush=True)
+        print(f"[BYPASS] vote session: {vote_count} votes for {target} (camera check by {user})", flush=True)
         cycle_start = time.monotonic()
         deadline = cycle_start + AI_CYCLE_DURATION_SECONDS
         submitted = 0
@@ -2552,12 +2556,13 @@ def run_simulated_vote_session(target, vote_count, token, user):
             time.sleep(0.05)
         outcome = ai_votes.tally(votes, None, AI_MIN_CONFIDENCE, AI_MIN_VALID_FRAMES,
                                  AI_MIN_WINNING_VOTE_FRACTION)
+        outcome["cycleDuration"] = round(time.monotonic() - cycle_start, 1)
+        outcome["votes"] = dict(votes)
         with ai_state_lock:
             ai_state.update(detectedStage=outcome["stage"], confidence=None, confident=outcome["confident"],
                             lastInference=utc_timestamp(), inferenceTimeMs=None,
-                            cycleDuration=round(time.monotonic() - cycle_start, 1),
-                            framesAnalyzed=outcome["frames"], failedFrames=0, votes=dict(votes),
-                            status=outcome["status"], error=None)
+                            cycleDuration=outcome["cycleDuration"], framesAnalyzed=outcome["frames"],
+                            failedFrames=0, votes=dict(votes), status=outcome["status"], error=None)
         with state_lock:
             current = str(state.get("stage") or "").strip().upper()
         if not outcome["confident"]:
@@ -2570,23 +2575,24 @@ def run_simulated_vote_session(target, vote_count, token, user):
             with stage_session_lock:
                 stage_session["status"] = "applying"
             hardware = apply_confirmed_stage_to_arduino(outcome["stage"], owner=True)
+            outcome["hardware"] = hardware
             if hardware.get("success"):
                 # A new stage starts a fresh scheduled AI candidate.
                 reset_transition_candidate("applied")
                 result, applied_to = "applied", hardware.get("to")
                 print(f"[AUDIT] stage {current or '-'} -> {applied_to} by {user} "
-                      f"(maintenance vote session, {vote_count} votes)", flush=True)
+                      f"(maintenance preset, {vote_count} votes)", flush=True)
             else:
                 status = hardware.get("status") or "failed"
                 result, error = "failed", STAGE_HANDOFF_ERRORS.get(status, status)
     except VoteSessionCancelled:
         with ai_state_lock:
             ai_state.update(previous)
-        result, error = "cancelled", "Maintenance session ended; the vote was discarded"
+        result, error, outcome = "cancelled", "Maintenance session ended; the vote was discarded", None
     except Exception as exc:  # never leave a half-finished vote on screen
         with ai_state_lock:
             ai_state.update(previous)
-        result, error = "failed", str(exc)
+        result, error, outcome = "failed", str(exc), None
     finally:
         with ai_state_lock:
             ai_state["cycleRunning"] = False
@@ -2597,19 +2603,75 @@ def run_simulated_vote_session(target, vote_count, token, user):
             finished_at = stage_session["finishedAt"]
     if result != "cancelled":
         record_stage_session({"at": finished_at, "from": start_stage or None, "to": applied_to, "by": user,
-                              "source": ai_votes.SOURCE_SIMULATED, "stage": target, "votes": vote_count,
-                              "result": result, "error": error})
+                              "source": ai_votes.SOURCE_SIMULATED, "trigger": "camera_check", "stage": target,
+                              "votes": vote_count, "result": result, "error": error})
     print(f"[BYPASS] vote session {target} x{vote_count}: {result}" + (f" ({error})" if error else ""), flush=True)
+    return {"result": result, "error": error, "outcome": outcome}
 
 
-@app.route("/api/bypass/confirm-stage", methods=["POST"])
-def bypass_confirm_stage():
-    """Owner confirms a stage (any direction) by submitting simulated votes to
-    the 30-second AI vote (run_simulated_vote_session). Returns 202 at once;
-    progress is in /api/bypass/status (stageSession)."""
+# The stored preset (owner, 2026-11-24): while maintenance is unlocked, the
+# main app's Camera check runs a vote session with it instead of the camera.
+# It belongs to the maintenance login that set it, so it ends on Exit, on
+# Return to automatic (cleared there) and when the session expires.
+stage_preset_lock = threading.Lock()
+stage_preset = None  # {"stage", "votes", "setAt", "by", "token"}
+
+
+def active_stage_preset():
+    """The stored preset (with its token) while its maintenance login is valid."""
+    with stage_preset_lock:
+        preset = dict(stage_preset) if stage_preset else None
+    if preset and stage_session_token_valid(preset["token"]):
+        return preset
+    return None
+
+
+def stage_preset_snapshot():
+    preset = active_stage_preset()
+    if not preset:
+        return None
+    preset.pop("token", None)
+    return preset
+
+
+def clear_stage_preset():
+    global stage_preset
+    with stage_preset_lock:
+        stage_preset = None
+
+
+def run_preset_camera_check(preset, user):
+    """Camera check (Analyze now) with the stored preset. Same response shape
+    as run_ai_cycle; on success the stage is applied if the votes confirm it."""
+    if not ai_cycle_lock.acquire(blocking=False):
+        return {"success": False, "error": "AI analysis cycle already running", "busy": True}
+    session = run_simulated_vote_session(preset["stage"], preset["votes"], preset["token"], user)
+    outcome = session["outcome"]
+    if outcome is None:
+        return {"success": False, "error": "AI analysis cycle was interrupted"}
+    hardware = outcome.get("hardware")
+    return {"success": True, "stage": outcome["stage"], "detectedStage": outcome["stage"],
+            "confidence": None, "confident": outcome["confident"], "status": outcome["status"],
+            "minimumConfidence": AI_MIN_CONFIDENCE, "cycleDuration": outcome["cycleDuration"],
+            "framesAnalyzed": outcome["frames"], "failedFrames": 0, "votes": outcome["votes"],
+            "transition": {"status": session["result"], "hardware": hardware} if hardware else {"status": session["result"]},
+            "inferenceTimeMs": None, "source": ai_votes.SOURCE_SIMULATED}
+
+
+@app.route("/api/bypass/stage-preset", methods=["POST"])
+def bypass_stage_preset():
+    """Store {stage, votes} for the main app's next Camera checks, or
+    {clear: true} to go back to real camera checks."""
+    global stage_preset
     if not bypass_authorized():
         return jsonify(error="Unauthorized"), 403
     body = request.get_json(silent=True) or {}
+    if body.get("clear") is True:
+        clear_stage_preset()
+        print(f"[AUDIT] stage preset cleared by {request_user()}", flush=True)
+        return jsonify(success=True, stagePreset=None)
+    if not bypass_active():
+        return jsonify(error="Manual controls paused. Click Resume Bypass first."), 409
     target = str(body.get("stage") or "").strip().upper()
     if target not in stage_schedule.STAGES:
         return jsonify(error="Stage must be STARTER, GROWER or FINISHER"), 400
@@ -2617,27 +2679,13 @@ def bypass_confirm_stage():
         vote_count = ai_votes.parse_vote_count(body.get("votes"))
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
-    with state_lock:
-        online = arduino_online_locked()
-    if not online:
-        return jsonify(error="Arduino offline; no vote was started"), 503
-    if not ai_cycle_lock.acquire(blocking=False):
-        return jsonify(error="A 30-second vote is already running; try again when it finishes", busy=True), 409
-    try:
-        with bypass_lock:
-            token = bypass_token
-        user = request_user()
-        with stage_session_lock:
-            stage_session.update(id=stage_session["id"] + 1, status="starting", stage=target, votes=vote_count,
-                                 submitted=0, result=None, error=None, startedAt=utc_timestamp(), finishedAt=None)
-            stage_session["from"] = None
-        threading.Thread(target=run_simulated_vote_session, args=(target, vote_count, token, user),
-                         daemon=True).start()
-    except Exception:
-        ai_cycle_lock.release()
-        raise
-    return jsonify(success=True, started=True, seconds=AI_CYCLE_DURATION_SECONDS,
-                   session=stage_session_snapshot()), 202
+    with bypass_lock:
+        token = bypass_token
+    with stage_preset_lock:
+        stage_preset = {"stage": target, "votes": vote_count, "setAt": utc_timestamp(),
+                        "by": request_user(), "token": token}
+    print(f"[AUDIT] stage preset {target} x{vote_count} by {request_user()}", flush=True)
+    return jsonify(success=True, stagePreset=stage_preset_snapshot())
 
 
 def _trough_status():
@@ -2842,6 +2890,7 @@ def bypass_return_live():
         for key in sim_readings: sim_readings[key] = None
     cancel_schedule_test()
     simulation_clear()
+    clear_stage_preset()
     # BYPASS_ACK:OFF means the Arduino is back under automatic control.
     return jsonify(success=True,status="automatic",maintenanceAuthenticated=True,manualControlsPaused=True),200
 
@@ -3041,11 +3090,16 @@ def get_ai_status():
     methods=["POST"]
 )
 def manual_ai_classification():
-    """Analyze now: always a real camera check that never changes the stage
-    (SPEC-stage-schedule). It never runs the maintenance simulation."""
+    """Analyze now: a real camera check that never changes the stage
+    (SPEC-stage-schedule). While a maintenance stage preset is stored, it runs
+    the preset's vote session instead, which applies the stage if the votes
+    confirm it (owner, 2026-11-24)."""
 
+    preset = active_stage_preset()
     result = (
-        run_ai_cycle()
+        run_preset_camera_check(preset, request_user())
+        if preset
+        else run_ai_cycle()
     )
 
     if not result["success"]:
