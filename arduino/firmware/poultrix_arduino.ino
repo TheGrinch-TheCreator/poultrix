@@ -970,10 +970,13 @@ void controlTemperature() {
 // ============================================================
 // AUTOMATIC LIVE LIGHTING CONTROL
 // Simple continuous threshold, no periodic LED-off probe.
-// Below 50 lux -> ON; above 50 lux -> OFF; at 50 -> unchanged.
+// Below 100 lux -> ON; once on, OFF only after sustained daylight (below).
 // IMPORTANT: Shield the LDR from the LED to avoid feedback flicker.
 // ============================================================
-const float LIGHT_ON_BELOW_LUX = 50.0f;   // LED off -> on below 50 lux
+// The installed LDR reads raw 18-21 (57-74 "lux") all night from stray light
+// (covered it reads raw 9), so the old 50 lux threshold never switched the
+// LED on after dark (2026-11-25). Morning daylight reads raw 29+ (>120 lux).
+const float LIGHT_ON_BELOW_LUX = 100.0f;  // LED off -> on below 100 lux (~raw 25)
 // The LDR also sees the LED's own light (about 86 lux on 2026-11-08), so a
 // lit LED switched itself off every 30 s. Once on, it now stays on until the
 // sensor reads clear daylight (> 250 lux) continuously for 5 minutes.
