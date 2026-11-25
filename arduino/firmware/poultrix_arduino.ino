@@ -926,9 +926,14 @@ void applyAutoHeater(bool want, bool force) {
   lastAutoHeaterChange = millis();
 }
 
+// The LED is a light load, so it uses a short dwell instead of the 30 s
+// fan/heater dwell: the lighting response is measured in the trial.
+const unsigned long AUTO_LED_MIN_DWELL_MS = 4000UL;
+
 void applyAutoLed(bool want, bool force) {
   if (manualLed || ledState == want) return;
-  if (!force && !autoDwellElapsed(lastAutoLedChange)) return;
+  if (!force && lastAutoLedChange != 0 &&
+      millis() - lastAutoLedChange < AUTO_LED_MIN_DWELL_MS) return;
   setLED(want);
   lastAutoLedChange = millis();
   Serial.println(want ? F("AUTO_LED:ON_DARK") : F("AUTO_LED:OFF_BRIGHT"));
@@ -979,9 +984,11 @@ void controlTemperature() {
 const float LIGHT_ON_BELOW_LUX = 100.0f;  // LED off -> on below 100 lux (~raw 25)
 // The LDR also sees the LED's own light (about 86 lux on 2026-11-08), so a
 // lit LED switched itself off every 30 s. Once on, it now stays on until the
-// sensor reads clear daylight (> 250 lux) continuously for 5 minutes.
+// sensor reads clear daylight (> 250 lux; the lit LED alone reads ~125 lux)
+// for 4 s, i.e. on consecutive 2 s readings (was 5 min; shortened for the
+// lighting response trial, 2026-11-25: off in ~4-6 s, on in ~2-4 s).
 const float LIGHT_DAYLIGHT_LUX = 250.0f;
-const unsigned long LIGHT_DAYLIGHT_CONFIRM_MS = 300000UL;
+const unsigned long LIGHT_DAYLIGHT_CONFIRM_MS = 4000UL;
 unsigned long daylightSince = 0;
 
 void controlLiveLighting() {
