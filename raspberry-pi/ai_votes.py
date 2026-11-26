@@ -155,6 +155,59 @@ def parse_preset_queue(value):
     return queue
 
 
+LIBRARY_MAX_PRESETS = 200
+LIBRARY_FILTERS = ("STARTER", "GROWER", "FINISHER", "TIE", "NONE")
+
+
+def parse_preset_library(value):
+    """The saved presets of the maintenance site and each filter's order
+    (owner, 2026-11-26: shared by every device, so they live on the Pi).
+    value: {"presets": [{"id", "name", "counts": {STAGE: n}, "confidence"?,
+    "category"?}], "orders": {FILTER: [id, ...]}}. The presets list is the
+    "All" order. Returns the cleaned library; raises ValueError."""
+    if not isinstance(value, dict) or not isinstance(value.get("presets"), list):
+        raise ValueError("The preset list is not valid")
+    raw_presets = value["presets"]
+    if len(raw_presets) > LIBRARY_MAX_PRESETS:
+        raise ValueError(f"At most {LIBRARY_MAX_PRESETS} saved presets")
+    presets, ids = [], set()
+    for number, entry in enumerate(raw_presets, 1):
+        if not isinstance(entry, dict):
+            raise ValueError(f"Saved preset {number} is not valid")
+        preset_id = entry.get("id")
+        if (not isinstance(preset_id, str) or not 1 <= len(preset_id) <= 40
+                or not all(c.isascii() and (c.isalnum() or c in "-_") for c in preset_id) or preset_id in ids):
+            raise ValueError(f"Saved preset {number} has no valid id")
+        ids.add(preset_id)
+        name = entry.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"Saved preset {number} needs a name")
+        try:
+            _, counts, _ = parse_vote_counts(entry.get("counts"))
+            confidence = parse_confidence(entry.get("confidence"))
+        except ValueError as exc:
+            raise ValueError(f"Saved preset {number}: {exc}") from None
+        category = entry.get("category")
+        if category is not None and category not in LIBRARY_FILTERS:
+            raise ValueError(f"Saved preset {number} has an unknown filter")
+        preset = {"id": preset_id, "name": name.strip()[:PRESET_NAME_MAX],
+                  "counts": {name_.upper(): count for name_, count in counts.items()}, "confidence": confidence}
+        if category is not None:
+            preset["category"] = category
+        presets.append(preset)
+    raw_orders = value.get("orders")
+    raw_orders = {} if raw_orders is None else raw_orders
+    if not isinstance(raw_orders, dict):
+        raise ValueError("The filter orders are not valid")
+    orders = {}
+    for key, order in raw_orders.items():
+        if key not in LIBRARY_FILTERS or not isinstance(order, list):
+            raise ValueError("The filter orders are not valid")
+        # Ids of deleted presets are dropped; duplicates keep their first place.
+        orders[key] = list(dict.fromkeys(item for item in order if isinstance(item, str) and item in ids))
+    return {"presets": presets, "orders": orders}
+
+
 def vote_sequence(counts, rng=random):
     """The stage of each simulated vote, in a random order (shuffled, so the
     stages are mixed like camera frames instead of one block per stage)."""

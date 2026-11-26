@@ -2454,7 +2454,7 @@ def bypass_status():
         lost_at=bypass_connection_lost_at
     with state_lock:
         relays=list(state.get("fans", [False]*4)) + [bool(state.get("led",False))] + list(state.get("heaters",[False]*2))[:1]
-    return jsonify(active=not bypass_paused,maintenanceAuthenticated=True,manualControlsPaused=bypass_paused,connectionLostAt=lost_at,expiresSeconds=remaining,overrides=overrides,readings=readings,readingsUpdatedAt=readings_at,relays=relays,simulation=simulation_snapshot(),manualStageHistory=_manual_history()[-5:],stageSession=stage_session_snapshot(),stagePreset=stage_preset_snapshot(),schedule=current_schedule_status(),trough=_trough_status())
+    return jsonify(active=not bypass_paused,maintenanceAuthenticated=True,manualControlsPaused=bypass_paused,connectionLostAt=lost_at,expiresSeconds=remaining,overrides=overrides,readings=readings,readingsUpdatedAt=readings_at,relays=relays,simulation=simulation_snapshot(),manualStageHistory=_manual_history()[-5:],stageSession=stage_session_snapshot(),stagePreset=stage_preset_snapshot(),stageLibraryRevision=stage_library_revision(),schedule=current_schedule_status(),trough=_trough_status())
 
 STAGE_MANUAL_PATH = Path(__file__).with_name("stage_manual.json")
 STAGE_MANUAL_HISTORY = 20
@@ -2793,6 +2793,66 @@ def bypass_stage_preset():
     print(f"[AUDIT] stage preset list of {len(queue)} by {request_user()}: "
           + "; ".join(f"{entry['name'] or '-'} {entry['counts']} {entry['confidence']}" for entry in queue), flush=True)
     return jsonify(success=True, stagePreset=stage_preset_snapshot())
+
+
+# Saved stage presets of the maintenance site (owner, 2026-11-26): kept on the
+# Pi so every maintenance device sees the same presets and filter orders.
+# Saved whole; "revision" stops a device with an old copy overwriting newer edits.
+STAGE_LIBRARY_PATH = Path(__file__).with_name("stage_presets.json")
+stage_library_lock = threading.Lock()
+
+
+def _load_stage_library():
+    try:
+        data = json.loads(STAGE_LIBRARY_PATH.read_text(encoding="utf-8"))
+        library = ai_votes.parse_preset_library(data)
+        return dict(library, revision=int(data.get("revision") or 0), updatedAt=data.get("updatedAt"))
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError, TypeError) as error:
+        print(f"[BYPASS] Could not read {STAGE_LIBRARY_PATH.name}: {error}", flush=True)
+    return {"presets": [], "orders": {}, "revision": 0, "updatedAt": None}
+
+
+stage_library = _load_stage_library()
+
+
+def stage_library_revision():
+    with stage_library_lock:
+        return stage_library["revision"]
+
+
+@app.route("/api/bypass/stage-library", methods=["GET", "POST"])
+def bypass_stage_library():
+    """GET: the saved presets and filter orders. POST {presets, orders,
+    revision}: replaces them if revision is the current one (409 with the
+    current library otherwise, so the device reloads instead of overwriting)."""
+    global stage_library
+    if not bypass_authorized():
+        return jsonify(error="Unauthorized"), 403
+    if request.method == "GET":
+        with stage_library_lock:
+            return jsonify(stage_library)
+    body = request.get_json(silent=True) or {}
+    try:
+        library = ai_votes.parse_preset_library(body)
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    with stage_library_lock:
+        if body.get("revision") != stage_library["revision"]:
+            return jsonify(error="The presets were changed on another device; reloaded them",
+                           library=stage_library), 409
+        updated = dict(library, revision=stage_library["revision"] + 1, updatedAt=utc_timestamp())
+        try:
+            tmp = STAGE_LIBRARY_PATH.with_name(STAGE_LIBRARY_PATH.name + ".tmp")
+            tmp.write_text(json.dumps(updated, indent=2), encoding="utf-8")
+            os.replace(tmp, STAGE_LIBRARY_PATH)
+        except OSError as error:
+            return jsonify(error=f"Could not save the presets: {error}"), 500
+        stage_library = updated
+    print(f"[AUDIT] saved stage presets: {len(library['presets'])} (revision {updated['revision']}) "
+          f"by {request_user()}", flush=True)
+    return jsonify(updated)
 
 
 def _trough_status():

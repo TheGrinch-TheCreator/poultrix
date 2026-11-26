@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Card, CardTitle, Pill } from "@/components/poultrix/ui";
 import { LiveVideoPlayer } from "@/components/poultrix/LiveVideoPlayer";
 import poultrixLogo from "@/assets/poultrix-logo.png";
@@ -28,6 +28,7 @@ type BypassStatus = {
     stage: string | null; votes: number; counts?: Record<string, number>; confidence: number | null; setAt: string; by: string;
     name?: string | null; position?: number; queue?: { name: string | null; counts: Record<string, number>; confidence: number | null }[];
   } | null;
+  stageLibraryRevision?: number;
   stageSession?: { id: number; status: string; stage: string | null; votes: number | null; submitted: number; confirmations?: number; required?: number; result: string | null; error: string | null; startedAt: string | null; finishedAt: string | null };
   trough?: {
     raw: number | null; zeroRaw: number | null; countsPerGram: number | null; zeroAt: string | null; checkedAt: string | null;
@@ -53,13 +54,17 @@ const title = (stage: string | null | undefined) => (stage ? stage.charAt(0) + s
 const MIN_WINNING_SHARE = 0.6; // AI_MIN_WINNING_VOTE_FRACTION on the Pi
 type StageKey = (typeof STAGES)[number];
 type VoteCounts = Record<StageKey, number>;
-// Saved presets live in this browser (owner, 2026-11-26); "Use" stores one on the Pi.
+// Saved presets and filter orders live on the Pi (owner, 2026-11-26: the same on every device);
+// "Use" sends a list of them to the Pi's preset queue.
 // category: the filter the owner put it in; missing means Auto (sorted by its votes).
 type SavedPreset = { id: string; name: string; counts: VoteCounts; confidence: number | null; category?: Outcome | undefined };
-const PRESETS_KEY = "poultrix-maintenance-stage-presets";
 // Each filter keeps its own order (owner, 2026-11-26). "All" is the saved list's own order;
-// the others are preset ids in this key. A preset missing from a filter's order goes last.
+// the others are lists of preset ids. A preset missing from a filter's order goes last.
+// Before the Pi kept them, presets were saved in the browser under these keys; a browser that
+// still has some uploads them once if the Pi has none, then keeps them as a backup.
+const PRESETS_KEY = "poultrix-maintenance-stage-presets";
 const ORDERS_KEY = "poultrix-maintenance-stage-preset-orders";
+type PresetLibrary = { presets: SavedPreset[]; orders: FilterOrders; revision: number };
 // Must match raspberry-pi/ai_votes.py (PRESET_QUEUE_MAX / PRESET_NAME_MAX).
 const PRESET_QUEUE_MAX = 30;
 const PRESET_NAME_MAX = 40;
@@ -116,13 +121,13 @@ const countsText = (counts: Partial<Record<string, number>> | undefined) =>
   STAGES.map((stage) => `${title(stage)} ${countOf(counts, stage)}`).join(" · ");
 const sameCounts = (a: Partial<Record<string, number>> | undefined, b: VoteCounts) =>
   !!a && STAGES.every((stage) => countOf(a, stage) === b[stage]);
-function loadPresets(): SavedPreset[] {
+function loadLocalPresets(): SavedPreset[] {
   try {
     const value = JSON.parse(localStorage.getItem(PRESETS_KEY) || "[]");
     return Array.isArray(value) ? value : [];
   } catch { return []; }
 }
-function loadOrders(): FilterOrders {
+function loadLocalOrders(): FilterOrders {
   try {
     const value = JSON.parse(localStorage.getItem(ORDERS_KEY) || "{}");
     return value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -156,19 +161,12 @@ export function Console() {
   const [countText, setCountText] = useState<Record<StageKey, string>>({ STARTER: "0", GROWER: String(VOTES_DEFAULT), FINISHER: "0" });
   const [confidenceText, setConfidenceText] = useState("");
   const [presetName, setPresetName] = useState("");
-  const [saved, setSaved] = useState<SavedPreset[]>(loadPresets);
+  const [library, setLibrary] = useState<PresetLibrary | null>(null);
+  const saved = library?.presets ?? [];
+  const orders = library?.orders ?? {};
   const [editingId, setEditingId] = useState<string | null>(null);
   const [filter, setFilter] = useState<Outcome | "ALL">("ALL");
   const [category, setCategory] = useState<Outcome | "AUTO">("AUTO");
-  const [orders, setOrders] = useState<FilterOrders>(loadOrders);
-  function storeOrders(next: FilterOrders) {
-    setOrders(next);
-    try { localStorage.setItem(ORDERS_KEY, JSON.stringify(next)); } catch { /* storage unavailable */ }
-  }
-  function storePresets(next: SavedPreset[]) {
-    setSaved(next);
-    try { localStorage.setItem(PRESETS_KEY, JSON.stringify(next)); } catch { /* storage unavailable */ }
-  }
 
   function clearSession(note?: string) {
     setToken("");
@@ -190,6 +188,55 @@ export function Console() {
   async function call<T = Record<string, unknown>>(path: string, body?: unknown): Promise<T> {
     return piRequest<T>(`/bypass/${path}`, { token, method: "POST", body: body ?? {} });
   }
+
+  // Saved presets: loaded from the Pi, and again whenever another device changes them.
+  const loadingLibrary = useRef(false);
+  const remoteRevision = status?.stageLibraryRevision;
+  useEffect(() => {
+    if (!token || loadingLibrary.current) return;
+    if (library && (remoteRevision === undefined || remoteRevision === library.revision)) return;
+    loadingLibrary.current = true;
+    void (async () => {
+      try {
+        let loaded = await piRequest<PresetLibrary>("/bypass/stage-library", { token });
+        const local = loadLocalPresets();
+        if (loaded.revision === 0 && loaded.presets.length === 0 && local.length > 0) {
+          // First time on the Pi: upload this browser's presets and orders, then keep them only as a backup.
+          loaded = await piRequest<PresetLibrary>("/bypass/stage-library", { token, method: "POST", body: { presets: local, orders: loadLocalOrders(), revision: 0 } });
+          try {
+            localStorage.setItem(`${PRESETS_KEY}-backup`, localStorage.getItem(PRESETS_KEY) ?? "[]");
+            localStorage.setItem(`${ORDERS_KEY}-backup`, localStorage.getItem(ORDERS_KEY) ?? "{}");
+            localStorage.removeItem(PRESETS_KEY);
+            localStorage.removeItem(ORDERS_KEY);
+          } catch { /* storage unavailable */ }
+          setMessage(`Moved ${local.length} saved preset${local.length === 1 ? "" : "s"} from this browser to the Raspberry Pi; every device now sees them in the same order.`);
+        }
+        setLibrary(loaded);
+      } catch (error) {
+        if (sessionExpired(error)) clearSession();
+        else setMessage(`Could not load the saved presets: ${error instanceof Error ? error.message : String(error)}`);
+      } finally { loadingLibrary.current = false; }
+    })();
+    // `status` changes on every 3 s poll, so a failed load is retried.
+  }, [token, remoteRevision, library, status]);
+
+  // Saves the whole preset list and filter orders on the Pi.
+  async function saveLibrary(presets: SavedPreset[], nextOrders: FilterOrders) {
+    if (!library) return;
+    const previous = library;
+    setLibrary({ ...library, presets, orders: nextOrders });
+    setBusy(true);
+    try {
+      setLibrary(await piRequest<PresetLibrary>("/bypass/stage-library", { token, method: "POST", body: { presets, orders: nextOrders, revision: previous.revision } }));
+    } catch (error) {
+      if (sessionExpired(error)) clearSession();
+      setMessage(error instanceof Error ? error.message : String(error));
+      // Back to the last saved list; if another device changed it, the next status poll reloads it.
+      setLibrary(previous);
+    } finally { setBusy(false); }
+  }
+  const storePresets = (next: SavedPreset[]) => void saveLibrary(next, orders);
+  const storeOrders = (next: FilterOrders) => void saveLibrary(saved, next);
 
   async function perform(path: string, body?: unknown) {
     setBusy(true);

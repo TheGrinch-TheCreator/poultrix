@@ -599,6 +599,37 @@ class PresetList(unittest.TestCase):
             self.assertEqual(self.pi.ns["stage_preset"]["name"], "A")
 
 
+class PresetLibrary(unittest.TestCase):
+    """Saved presets and filter orders, stored on the Pi for every device."""
+
+    GOOD = {"presets": [
+        {"id": "1764-ab", "name": " Grower A ", "counts": {"STARTER": 2, "GROWER": 17, "FINISHER": 9}, "confidence": 85},
+        {"id": "1765-cd", "name": "Tie", "counts": {"GROWER": 12, "FINISHER": 12}, "confidence": None, "category": "TIE"},
+    ], "orders": {"GROWER": ["1764-ab"], "TIE": ["gone", "1765-cd", "1765-cd"]}}
+
+    def test_clean_library(self):
+        library = av.parse_preset_library(self.GOOD)
+        self.assertEqual([p["id"] for p in library["presets"]], ["1764-ab", "1765-cd"])
+        self.assertEqual(library["presets"][0]["name"], "Grower A")
+        self.assertEqual(library["presets"][0]["counts"], {"STARTER": 2, "GROWER": 17, "FINISHER": 9})
+        self.assertEqual(library["presets"][0]["confidence"], 85.0)
+        self.assertNotIn("category", library["presets"][0])
+        self.assertEqual(library["presets"][1]["category"], "TIE")
+        self.assertEqual(library["orders"], {"GROWER": ["1764-ab"], "TIE": ["1765-cd"]})
+        self.assertEqual(av.parse_preset_library({"presets": []}), {"presets": [], "orders": {}})
+
+    def test_bad_libraries(self):
+        good = self.GOOD["presets"][0]
+        for bad in (None, [], {"presets": "x"}, {"presets": [good, dict(good)]},
+                    {"presets": [dict(good, id="bad id!")]}, {"presets": [dict(good, name="")]},
+                    {"presets": [dict(good, counts={"GROWER": 0})]}, {"presets": [dict(good, confidence=101)]},
+                    {"presets": [dict(good, category="MAYBE")]}, {"presets": [good], "orders": {"ALL": []}},
+                    {"presets": [good], "orders": []},
+                    {"presets": [dict(good, id=f"p{i}") for i in range(av.LIBRARY_MAX_PRESETS + 1)]}):
+            with self.assertRaises(ValueError, msg=repr(bad)[:80]):
+                av.parse_preset_library(bad)
+
+
 def function_body(src, name):
     """Source of one top-level function in app.py."""
     node = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name == name)

@@ -31,6 +31,8 @@ type PiRoute = {
   owner?: boolean;
   /** Upstream timeout; defaults depend on method. */
   timeoutMs?: number;
+  /** Body limit for this route; defaults to MAX_BODY_BYTES (4 KB). */
+  maxBodyBytes?: number;
 };
 
 const GET: readonly Method[] = ["GET"];
@@ -77,6 +79,8 @@ const ROUTES: readonly PiRoute[] = [
   { path: "/bypass/resume", upstream: "/api/bypass/resume", methods: POST, maintenance: true },
   { path: "/bypass/exit", upstream: "/api/bypass/exit", methods: POST, maintenance: true },
   { path: "/bypass/stage-preset", upstream: "/api/bypass/stage-preset", methods: POST, maintenance: true },
+  // Saved stage presets and their orders, shared by every maintenance device (whole list per save).
+  { path: "/bypass/stage-library", upstream: "/api/bypass/stage-library", methods: BOTH, maintenance: true, maxBodyBytes: 65_536 },
   // Trough calibration takes 10 readings at 2 s each (SPEC-auto-feeding A2).
   { path: "/bypass/trough-zero", upstream: "/api/bypass/trough-zero", methods: POST, maintenance: true, timeoutMs: SLOW_MS },
   { path: "/bypass/trough-check", upstream: "/api/bypass/trough-check", methods: POST, maintenance: true, timeoutMs: SLOW_MS },
@@ -222,11 +226,11 @@ function emailList(value: string | undefined): Set<string> {
 
 // ---------------------------------------------------------------- handler
 
-async function readBody(request: Request): Promise<string | Response> {
+async function readBody(request: Request, limit = MAX_BODY_BYTES): Promise<string | Response> {
   const declared = Number(request.headers.get("content-length") ?? "0");
-  if (declared > MAX_BODY_BYTES) return json({ error: "Request body too large" }, 413);
+  if (declared > limit) return json({ error: "Request body too large" }, 413);
   const text = await request.text();
-  if (new TextEncoder().encode(text).length > MAX_BODY_BYTES) return json({ error: "Request body too large" }, 413);
+  if (new TextEncoder().encode(text).length > limit) return json({ error: "Request body too large" }, 413);
   return text;
 }
 
@@ -327,7 +331,7 @@ export function createPiGateway(options: { routes: readonly PiRoute[]; auth: Gat
     const headers: Record<string, string> = { accept: route.stream ? "*/*" : "application/json", "x-poultrix-user": identity.user };
     let body: string | undefined;
     if (method === "POST") {
-      const read = await readBody(request);
+      const read = await readBody(request, route.maxBodyBytes);
       if (read instanceof Response) return read;
       body = read;
       headers["content-type"] = "application/json";
