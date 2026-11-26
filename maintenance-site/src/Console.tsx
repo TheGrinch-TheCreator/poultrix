@@ -61,10 +61,23 @@ function judgeCounts(counts: VoteCounts) {
   const total = STAGES.reduce((sum, stage) => sum + counts[stage], 0);
   const top = Math.max(...STAGES.map((stage) => counts[stage]));
   const leaders = STAGES.filter((stage) => counts[stage] === top);
-  const error = total < VOTES_MIN || total > VOTES_MAX ? `Total votes must be ${VOTES_MIN} to ${VOTES_MAX}.`
-    : leaders.length !== 1 ? "Two stages have the most votes; give one stage more votes." : null;
-  return { total, winner: leaders.length === 1 ? leaders[0] : null, share: total ? top / total : 0, error };
+  const error = total < VOTES_MIN || total > VOTES_MAX ? `Total votes must be ${VOTES_MIN} to ${VOTES_MAX}.` : null;
+  return { total, winner: leaders.length === 1 ? leaders[0] : null, tie: leaders.length > 1, share: total ? top / total : 0, error };
 }
+// What a Camera check with these votes ends in, by the Pi's rules (ai_votes.tally):
+// a tie, no result (low confidence: under 60 % share, under 10 votes or confidence under 60 %), or a stage.
+type Outcome = StageKey | "TIE" | "NONE";
+const OUTCOME_FILTERS: { key: Outcome | "ALL"; label: string }[] = [
+  { key: "ALL", label: "All" }, { key: "STARTER", label: "Starter" }, { key: "GROWER", label: "Grower" },
+  { key: "FINISHER", label: "Finisher" }, { key: "TIE", label: "Tie" }, { key: "NONE", label: "No result" },
+];
+function outcomeOf(counts: VoteCounts, confidence: number | null): Outcome {
+  const check = judgeCounts(counts);
+  if (check.tie) return "TIE";
+  const confident = check.total >= MIN_VALID_VOTES && check.share >= MIN_WINNING_SHARE && (confidence == null || confidence >= MIN_CONFIDENCE);
+  return confident && check.winner ? check.winner : "NONE";
+}
+const outcomeText = (outcome: Outcome) => (outcome === "TIE" ? "Tie" : outcome === "NONE" ? "No result" : title(outcome));
 // Pi results use "Starter" keys, saved presets use "STARTER".
 const countOf = (counts: Partial<Record<string, number>> | undefined, stage: StageKey) => counts?.[stage] ?? counts?.[title(stage)] ?? 0;
 const countsText = (counts: Partial<Record<string, number>> | undefined) =>
@@ -106,6 +119,8 @@ export function Console() {
   const [confidenceText, setConfidenceText] = useState("");
   const [presetName, setPresetName] = useState("");
   const [saved, setSaved] = useState<SavedPreset[]>(loadPresets);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [filter, setFilter] = useState<Outcome | "ALL">("ALL");
   function storePresets(next: SavedPreset[]) {
     setSaved(next);
     try { localStorage.setItem(PRESETS_KEY, JSON.stringify(next)); } catch { /* storage unavailable */ }
@@ -149,6 +164,20 @@ export function Console() {
     } finally { setBusy(false); }
   }
 
+  const inUseNow = (preset: SavedPreset) =>
+    !!status?.stagePreset && sameCounts(status.stagePreset.counts, preset.counts) && (status.stagePreset.confidence ?? null) === preset.confidence;
+  // Swaps two presets in the saved order (the neighbour shown in the current filter).
+  function movePreset(id: string, otherId: string) {
+    const next = [...saved];
+    const a = next.findIndex((item) => item.id === id);
+    const b = next.findIndex((item) => item.id === otherId);
+    const first = next[a], second = next[b];
+    if (!first || !second) return;
+    next[a] = second;
+    next[b] = first;
+    storePresets(next);
+  }
+
   // Stores a preset on the Pi (null clears it): the app's next Camera checks vote with it.
   async function savePreset(preset: { counts: VoteCounts; confidence: number | null; name?: string } | null) {
     const winner = preset ? judgeCounts(preset.counts) : null;
@@ -157,7 +186,7 @@ export function Console() {
     try {
       await call("stage-preset", preset ? { votes: preset.counts, confidence: preset.confidence } : { clear: true });
       setMessage(preset
-        ? `Preset ${preset.name ? `"${preset.name}" ` : ""}set: ${countsText(preset.counts)}, ${pct(preset.confidence)}. Press Camera check in the app; the votes arrive in a random order and ${title(winner?.winner)} has the most.`
+        ? `Preset ${preset.name ? `"${preset.name}" ` : ""}set: ${countsText(preset.counts)}, ${pct(preset.confidence)}. Press Camera check in the app; the votes arrive in a random order and it ends in: ${outcomeText(outcomeOf(preset.counts, preset.confidence))}.`
         : "Preset cleared. Camera checks in the app use the camera again.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
@@ -360,6 +389,9 @@ export function Console() {
                             const check = judgeCounts(counts);
                             const ready = countsValid && !check.error && validConfidence(confidenceText);
                             const confidence = confidenceText.trim() === "" ? null : Number(confidenceText);
+                            const editing = saved.find((item) => item.id === editingId) ?? null;
+                            const defaultName = check.error ? "name"
+                              : `${check.tie ? "Tie" : title(check.winner)} ${check.total}${confidence != null ? ` @ ${confidence}%` : ""}`;
                             return (
                               <>
                                 <div className="mb-2 grid max-w-md grid-cols-3 gap-2">
@@ -374,9 +406,9 @@ export function Console() {
                                   ? <p className="mb-2 text-xs text-danger">Votes must be whole numbers (0 or more).</p>
                                   : check.error
                                     ? <p className="mb-2 text-xs text-danger">{check.error}</p>
-                                    : <p className="mb-2 text-xs text-muted-foreground">Total {check.total} votes, submitted in a random order · {title(check.winner)} has the most ({Math.round(check.share * 100)}%).</p>}
+                                    : <p className="mb-2 text-xs text-muted-foreground">Total {check.total} votes, submitted in a random order · {check.tie ? "two stages tie for the most: the check ends in a tie and never confirms a stage" : `${title(check.winner)} has the most (${Math.round(check.share * 100)}%)`} · result: <span className="font-semibold">{outcomeText(outcomeOf(counts, confidence))}</span>.</p>}
                                 {countsValid && !check.error && check.total < MIN_VALID_VOTES && <p className="mb-2 text-xs text-warn">Fewer than {MIN_VALID_VOTES} votes never confirms a stage (same rule as the camera).</p>}
-                                {countsValid && !check.error && check.share < MIN_WINNING_SHARE && <p className="mb-2 text-xs text-warn">{title(check.winner)} has under {MIN_WINNING_SHARE * 100}% of the votes: the result is low confidence and never confirms a stage (same rule as the camera).</p>}
+                                {countsValid && !check.error && !check.tie && check.share < MIN_WINNING_SHARE && <p className="mb-2 text-xs text-warn">{title(check.winner)} has under {MIN_WINNING_SHARE * 100}% of the votes: the result is low confidence and never confirms a stage (same rule as the camera).</p>}
                                 <label className="mb-3 block max-w-xs text-sm">Confidence % (optional, above 0 to 100)
                                   <input type="number" min="0.1" max="100" step="0.1" placeholder="none" className={inputClass + " mt-1"} value={confidenceText} onChange={(event) => setConfidenceText(event.target.value)} />
                                 </label>
@@ -384,42 +416,78 @@ export function Console() {
                                 {validConfidence(confidenceText) && confidenceText.trim() !== "" && Number(confidenceText) < MIN_CONFIDENCE && <p className="mb-2 text-xs text-warn">Below {MIN_CONFIDENCE}% the result is low confidence and never confirms a stage (same rule as the camera).</p>}
                                 <div className="mb-3 flex flex-wrap items-end gap-2">
                                   <label className="block text-sm">Preset name
-                                    <input className={inputClass + " mt-1"} placeholder={check.winner ? `${title(check.winner)} ${check.total}` : "name"} maxLength={40} value={presetName} onChange={(event) => setPresetName(event.target.value)} />
+                                    <input className={inputClass + " mt-1"} placeholder={defaultName} maxLength={40} value={presetName} onChange={(event) => setPresetName(event.target.value)} />
                                   </label>
+                                  {editing && (
+                                    <button className={btn} disabled={busy || !ready} onClick={() => {
+                                      const name = presetName.trim() || defaultName;
+                                      storePresets(saved.map((item) => (item.id === editing.id ? { ...item, name, counts, confidence } : item)));
+                                      setMessage(`Saved changes to "${name}".${inUseNow(editing) ? " It is the stored preset: press Use to send the new votes to the Pi." : ""}`);
+                                    }}>Save changes to "{editing.name}"</button>
+                                  )}
                                   <button className={btn} disabled={busy || !ready} onClick={() => {
-                                    const name = presetName.trim() || `${title(check.winner)} ${check.total}${confidence != null ? ` @ ${confidence}%` : ""}`;
-                                    storePresets([...saved, { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, name, counts, confidence }]);
-                                    setPresetName("");
+                                    const name = presetName.trim() || defaultName;
+                                    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+                                    storePresets([...saved, { id, name, counts, confidence }]);
+                                    setEditingId(id);
+                                    setPresetName(name);
                                     setMessage(`Saved preset "${name}". Press Use to set it.`);
-                                  }}>Save as preset</button>
+                                  }}>{editing ? "Save as new preset" : "Save as preset"}</button>
+                                  {editing && <button className={btn} disabled={busy} onClick={() => { setEditingId(null); setPresetName(""); }}>Stop editing</button>}
                                   <button className={btn} disabled={busy || !active || running || !ready} onClick={() => void savePreset({ counts, confidence })}>Use these votes now</button>
                                 </div>
                               </>
                             );
                           })()}
-                          {saved.length > 0 && (
-                            <ul className="mb-3 space-y-2">
-                              {saved.map((preset) => {
-                                const inUse = !!status?.stagePreset && sameCounts(status.stagePreset.counts, preset.counts) && (status.stagePreset.confidence ?? null) === preset.confidence;
-                                return (
-                                  <li key={preset.id} className={`flex flex-wrap items-center gap-2 rounded-lg border p-2 text-sm ${inUse ? "border-primary" : ""}`}>
-                                    <span className="font-semibold">{preset.name}</span>
-                                    <span className="text-xs text-muted-foreground">{countsText(preset.counts)} · {pct(preset.confidence)}</span>
-                                    {inUse && <Pill tone="ok">in use</Pill>}
-                                    <span className="ml-auto flex gap-2">
-                                      <button className={btn} disabled={busy || !active || running} onClick={() => void savePreset(preset)}>Use</button>
-                                      <button className={btn} disabled={busy} onClick={() => {
-                                        setCountText({ STARTER: String(preset.counts.STARTER), GROWER: String(preset.counts.GROWER), FINISHER: String(preset.counts.FINISHER) });
-                                        setConfidenceText(preset.confidence == null ? "" : String(preset.confidence));
-                                        setPresetName(preset.name);
-                                      }}>Load</button>
-                                      <button className={btn} disabled={busy} onClick={() => { if (window.confirm(`Delete preset "${preset.name}"?`)) storePresets(saved.filter((item) => item.id !== preset.id)); }}>Delete</button>
-                                    </span>
-                                  </li>
-                                );
-                              })}
-                            </ul>
-                          )}
+                          {saved.length > 0 && (() => {
+                            const visible = saved.filter((preset) => filter === "ALL" || outcomeOf(preset.counts, preset.confidence) === filter);
+                            return (
+                              <>
+                                <div className="mb-2 flex flex-wrap gap-1" role="group" aria-label="Filter presets by result">
+                                  {OUTCOME_FILTERS.map(({ key, label }) => {
+                                    const count = key === "ALL" ? saved.length : saved.filter((preset) => outcomeOf(preset.counts, preset.confidence) === key).length;
+                                    return (
+                                      <button key={key} aria-pressed={filter === key} className={`${btn} px-2 py-1 text-xs ${filter === key ? "bg-muted" : ""}`} onClick={() => setFilter(key)}>
+                                        {label} ({count})
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                                {visible.length === 0 && <p className="mb-3 text-xs text-muted-foreground">No saved presets end in {outcomeText(filter as Outcome)}.</p>}
+                                <ul className="mb-3 space-y-2">
+                                  {visible.map((preset, index) => {
+                                    const inUse = inUseNow(preset);
+                                    return (
+                                      <li key={preset.id} className={`flex flex-wrap items-center gap-2 rounded-lg border p-2 text-sm ${inUse ? "border-primary" : ""}`}>
+                                        <span className="flex flex-col">
+                                          <button className="px-1 text-xs leading-none disabled:opacity-30" aria-label={`Move ${preset.name} up`} disabled={busy || index === 0} onClick={() => { const other = visible[index - 1]; if (other) movePreset(preset.id, other.id); }}>▲</button>
+                                          <button className="px-1 text-xs leading-none disabled:opacity-30" aria-label={`Move ${preset.name} down`} disabled={busy || index === visible.length - 1} onClick={() => { const other = visible[index + 1]; if (other) movePreset(preset.id, other.id); }}>▼</button>
+                                        </span>
+                                        <span className="font-semibold">{preset.name}</span>
+                                        <span className="text-xs text-muted-foreground">{countsText(preset.counts)} · {pct(preset.confidence)} · {outcomeText(outcomeOf(preset.counts, preset.confidence))}</span>
+                                        {inUse && <Pill tone="ok">in use</Pill>}
+                                        {editingId === preset.id && <Pill tone="info">editing</Pill>}
+                                        <span className="ml-auto flex gap-2">
+                                          <button className={btn} disabled={busy || !active || running} onClick={() => void savePreset(preset)}>Use</button>
+                                          <button className={btn} disabled={busy} onClick={() => {
+                                            setCountText({ STARTER: String(preset.counts.STARTER), GROWER: String(preset.counts.GROWER), FINISHER: String(preset.counts.FINISHER) });
+                                            setConfidenceText(preset.confidence == null ? "" : String(preset.confidence));
+                                            setPresetName(preset.name);
+                                            setEditingId(preset.id);
+                                          }}>Load</button>
+                                          <button className={btn} disabled={busy} onClick={() => {
+                                            if (!window.confirm(`Delete preset "${preset.name}"?`)) return;
+                                            storePresets(saved.filter((item) => item.id !== preset.id));
+                                            if (editingId === preset.id) setEditingId(null);
+                                          }}>Delete</button>
+                                        </span>
+                                      </li>
+                                    );
+                                  })}
+                                </ul>
+                              </>
+                            );
+                          })()}
                           <p className="mb-3 text-sm">
                             {status?.stagePreset
                               ? <>Stored preset: <span className="font-semibold">{title(status.stagePreset.stage)} most · {status.stagePreset.counts ? countsText(status.stagePreset.counts) : `${status.stagePreset.votes} votes`} · {pct(status.stagePreset.confidence)}</span> (used by the next Camera check in the app)</>

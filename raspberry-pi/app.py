@@ -2637,7 +2637,9 @@ def run_simulated_vote_session(target, vote_count, token, user, confidence=None,
                             confident=outcome["confident"],
                             lastInference=utc_timestamp(), inferenceTimeMs=None,
                             cycleDuration=outcome["cycleDuration"], framesAnalyzed=outcome["frames"],
-                            failedFrames=0, votes=dict(votes), status=outcome["status"], error=None)
+                            failedFrames=0, votes=dict(votes), status=outcome["status"],
+                            # Same message as a tied camera cycle (run_ai_cycle).
+                            error="AI cycle ended in a tied vote" if outcome["status"] == "tie" else None)
         transition = evaluate_preset_transition(outcome["stage"], outcome["confident"])
         outcome["transition"] = transition
         outcome["hardware"] = transition.get("hardware")

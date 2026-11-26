@@ -460,7 +460,9 @@ class MixedPreset(unittest.TestCase):
         self.assertEqual(av.parse_vote_counts({"STARTER": 2, "GROWER": 17, "FINISHER": 9}),
                          ("GROWER", {"Starter": 2, "Grower": 17, "Finisher": 9}, 28))
         self.assertEqual(av.parse_vote_counts({"finisher": 30.0}), ("FINISHER", {"Starter": 0, "Grower": 0, "Finisher": 30}, 30))
-        for bad in ({"GROWER": 10, "FINISHER": 10}, {}, {"GROWER": 0}, {"GROWER": 301}, {"GROWER": 200, "STARTER": 101},
+        self.assertEqual(av.parse_vote_counts({"GROWER": 10, "FINISHER": 10}),
+                         (None, {"Starter": 0, "Grower": 10, "Finisher": 10}, 20))  # a tie is allowed
+        for bad in ({}, {"GROWER": 0}, {"GROWER": 301}, {"GROWER": 200, "STARTER": 101},
                     {"GROWER": -1, "STARTER": 5}, {"GROWER": 2.5}, {"GROWER": True}, {"GROWER": "5"}, {"CHICK": 5}, [5], 5):
             with self.assertRaises(ValueError, msg=repr(bad)):
                 av.parse_vote_counts(bad)
@@ -503,6 +505,23 @@ class MixedPreset(unittest.TestCase):
             session = pi.run("GROWER", 30, counts={"Starter": 9, "Grower": 12, "Finisher": 9})
             self.assertEqual(session["result"], "not_confirmed")
             self.assertEqual(pi.ns["ai_state"]["status"], "low_confidence")
+        finally:
+            pi.close()
+
+    def test_a_tie_ends_like_a_tied_camera_vote(self):
+        pi = FakePi(stage="GROWER")
+        try:
+            counts = {"Starter": 3, "Grower": 12, "Finisher": 12}
+            pi.ns["stage_preset"] = {"stage": None, "votes": 27, "counts": counts, "confidence": 80.0,
+                                     "setAt": "t", "by": "ip:test", "token": "tok"}
+            result = pi.ns["run_preset_camera_check"](pi.ns["active_stage_preset"](), "owner@example")
+            self.assertEqual((result["status"], result["detectedStage"], result["confidence"], result["votes"]),
+                             ("tie", None, None, counts))
+            self.assertEqual(result["transition"]["status"], "not_confirmed")
+            ai = pi.ns["ai_state"]
+            self.assertEqual((ai["status"], ai["detectedStage"], ai["error"]), ("tie", None, "AI cycle ended in a tied vote"))
+            self.assertEqual(pi.ns["state"]["stage"], "GROWER")
+            self.assertEqual(pi.history()[-1]["stage"], None)
         finally:
             pi.close()
 

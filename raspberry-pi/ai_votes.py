@@ -100,9 +100,10 @@ def parse_vote_counts(value):
     """Votes per stage for a preset (owner, 2026-11-26), e.g.
     {"STARTER": 2, "GROWER": 17, "FINISHER": 9}. Keys are stage names in any
     case; a missing stage is 0. Each count and the total must be whole numbers,
-    the total SIM_VOTES_MIN..SIM_VOTES_MAX, and one stage must have the most
-    votes (a tie is never confirmed, so it is refused here).
-    Returns (winning stage in uppercase, {"Starter": n, ...}, total)."""
+    the total SIM_VOTES_MIN..SIM_VOTES_MAX. A tie is allowed (owner,
+    2026-11-26): it ends like a tied camera vote and never confirms a stage.
+    Returns (winning stage in uppercase or None for a tie, {"Starter": n, ...},
+    total)."""
     if not isinstance(value, dict):
         raise ValueError("Votes must give a number for each stage")
     counts = empty_votes()
@@ -124,9 +125,7 @@ def parse_vote_counts(value):
         raise ValueError(f"Total votes must be {SIM_VOTES_MIN} to {SIM_VOTES_MAX}")
     top = max(counts.values())
     winners = [name for name, count in counts.items() if count == top]
-    if len(winners) != 1:
-        raise ValueError("Two stages have the most votes; give one stage more votes")
-    return winners[0].upper(), counts, total
+    return (winners[0].upper() if len(winners) == 1 else None), counts, total
 
 
 def vote_sequence(counts, rng=random):
