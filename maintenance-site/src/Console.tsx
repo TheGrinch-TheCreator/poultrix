@@ -23,8 +23,8 @@ type BypassStatus = {
   readings?: Partial<Record<SensorKey, number | null>>;
   simulation?: { active?: boolean; stage?: string; framesAnalyzed?: number; confidence?: number | null };
   schedule?: StageSchedule;
-  manualStageHistory?: { at: string; from: string | null; to: string | null; stage?: string; votes?: number; confidence?: number | null; confirmations?: number; required?: number; result?: string; error?: string | null }[];
-  stagePreset?: { stage: string; votes: number; confidence: number | null; setAt: string; by: string } | null;
+  manualStageHistory?: { at: string; from: string | null; to: string | null; stage?: string; votes?: number; counts?: Record<string, number>; confidence?: number | null; confirmations?: number; required?: number; result?: string; error?: string | null }[];
+  stagePreset?: { stage: string; votes: number; counts?: Record<string, number>; confidence: number | null; setAt: string; by: string } | null;
   stageSession?: { id: number; status: string; stage: string | null; votes: number | null; submitted: number; confirmations?: number; required?: number; result: string | null; error: string | null; startedAt: string | null; finishedAt: string | null };
   trough?: {
     raw: number | null; zeroRaw: number | null; countsPerGram: number | null; zeroAt: string | null; checkedAt: string | null;
@@ -46,8 +46,37 @@ const SESSION_TEXT: Record<string, string> = {
 const MIN_CONFIDENCE = 60; // AI_MIN_CONFIDENCE on the Pi
 const validConfidence = (value: string) => value.trim() === "" || (Number.isFinite(Number(value)) && Number(value) > 0 && Number(value) <= 100);
 const pct = (value: number | null | undefined) => (typeof value === "number" ? `${value.toFixed(1)}%` : "no confidence");
-const validVotes = (value: string) => /^\d+$/.test(value.trim()) && Number(value) >= VOTES_MIN && Number(value) <= VOTES_MAX;
 const title = (stage: string | null | undefined) => (stage ? stage.charAt(0) + stage.slice(1).toLowerCase() : "—");
+const MIN_WINNING_SHARE = 0.6; // AI_MIN_WINNING_VOTE_FRACTION on the Pi
+type StageKey = (typeof STAGES)[number];
+type VoteCounts = Record<StageKey, number>;
+// Saved presets live in this browser (owner, 2026-11-26); "Use" stores one on the Pi.
+type SavedPreset = { id: string; name: string; counts: VoteCounts; confidence: number | null };
+const PRESETS_KEY = "poultrix-maintenance-stage-presets";
+const wholeOrBlank = (value: string) => value.trim() === "" || /^\d+$/.test(value.trim());
+const countsOf = (text: Record<StageKey, string>): VoteCounts =>
+  ({ STARTER: Number(text.STARTER || 0), GROWER: Number(text.GROWER || 0), FINISHER: Number(text.FINISHER || 0) });
+// Same rules as raspberry-pi/ai_votes.py parse_vote_counts: total 1–300, one clear top stage.
+function judgeCounts(counts: VoteCounts) {
+  const total = STAGES.reduce((sum, stage) => sum + counts[stage], 0);
+  const top = Math.max(...STAGES.map((stage) => counts[stage]));
+  const leaders = STAGES.filter((stage) => counts[stage] === top);
+  const error = total < VOTES_MIN || total > VOTES_MAX ? `Total votes must be ${VOTES_MIN} to ${VOTES_MAX}.`
+    : leaders.length !== 1 ? "Two stages have the most votes; give one stage more votes." : null;
+  return { total, winner: leaders.length === 1 ? leaders[0] : null, share: total ? top / total : 0, error };
+}
+// Pi results use "Starter" keys, saved presets use "STARTER".
+const countOf = (counts: Partial<Record<string, number>> | undefined, stage: StageKey) => counts?.[stage] ?? counts?.[title(stage)] ?? 0;
+const countsText = (counts: Partial<Record<string, number>> | undefined) =>
+  STAGES.map((stage) => `${title(stage)} ${countOf(counts, stage)}`).join(" · ");
+const sameCounts = (a: Partial<Record<string, number>> | undefined, b: VoteCounts) =>
+  !!a && STAGES.every((stage) => countOf(a, stage) === b[stage]);
+function loadPresets(): SavedPreset[] {
+  try {
+    const value = JSON.parse(localStorage.getItem(PRESETS_KEY) || "[]");
+    return Array.isArray(value) ? value : [];
+  } catch { return []; }
+}
 type Snapshot = {
   status?: {
     connected?: boolean; piSeenByArduino?: boolean | null; operatingStatus?: string; stage?: string;
@@ -73,8 +102,14 @@ export function Console() {
   const [seconds, setSeconds] = useState("0.5");
   const [values, setValues] = useState<Record<SensorKey, string>>({ temperature: "", ldr: "", hopper: "", trough: "" });
   const [relayState, setRelayState] = useState<Record<number, boolean>>({});
-  const [voteCount, setVoteCount] = useState(String(VOTES_DEFAULT));
+  const [countText, setCountText] = useState<Record<StageKey, string>>({ STARTER: "0", GROWER: String(VOTES_DEFAULT), FINISHER: "0" });
   const [confidenceText, setConfidenceText] = useState("");
+  const [presetName, setPresetName] = useState("");
+  const [saved, setSaved] = useState<SavedPreset[]>(loadPresets);
+  function storePresets(next: SavedPreset[]) {
+    setSaved(next);
+    try { localStorage.setItem(PRESETS_KEY, JSON.stringify(next)); } catch { /* storage unavailable */ }
+  }
 
   function clearSession(note?: string) {
     setToken("");
@@ -114,16 +149,15 @@ export function Console() {
     } finally { setBusy(false); }
   }
 
-  async function savePreset(target: (typeof STAGES)[number] | null) {
-    if (target && !validVotes(voteCount)) { setMessage(`Votes must be a whole number from ${VOTES_MIN} to ${VOTES_MAX}.`); return; }
-    if (target && !validConfidence(confidenceText)) { setMessage("Confidence must be above 0 and at most 100, or blank."); return; }
-    const votes = Number(voteCount);
-    const confidence = confidenceText.trim() === "" ? null : Number(confidenceText);
+  // Stores a preset on the Pi (null clears it): the app's next Camera checks vote with it.
+  async function savePreset(preset: { counts: VoteCounts; confidence: number | null; name?: string } | null) {
+    const winner = preset ? judgeCounts(preset.counts) : null;
+    if (winner?.error) { setMessage(winner.error); return; }
     setBusy(true);
     try {
-      await call("stage-preset", target ? { stage: target, votes, confidence } : { clear: true });
-      setMessage(target
-        ? `Preset saved: ${votes} votes for ${title(target)}, ${pct(confidence)}. The next Camera check in the app runs the 30-second vote with it; if the votes confirm it, the house switches to ${title(target)}.`
+      await call("stage-preset", preset ? { votes: preset.counts, confidence: preset.confidence } : { clear: true });
+      setMessage(preset
+        ? `Preset ${preset.name ? `"${preset.name}" ` : ""}set: ${countsText(preset.counts)}, ${pct(preset.confidence)}. Press Camera check in the app; the votes arrive in a random order and ${title(winner?.winner)} has the most.`
         : "Preset cleared. Camera checks in the app use the camera again.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
@@ -314,25 +348,81 @@ export function Console() {
                     {schedule && schedule.overdueDays > 0 && (
                       <p className="mb-2 text-sm text-warn">{title(schedule.overdueStage)} not confirmed by the AI for {schedule.overdueDays} day{schedule.overdueDays === 1 ? "" : "s"}.</p>
                     )}
-                    <p className="mb-3 text-xs text-muted-foreground">Save a stage and a number of votes. While maintenance is unlocked, each Camera check on the app's AI Growth Stage page runs the same 30-second AI vote with these votes instead of the camera, and the app shows the result as an AI result. Like the daily AI check, the stage changes only after 3 confident checks in a row for the same new stage (any stage, also backwards); the 3rd check sets it on the Arduino when its 30 seconds end. The preset ends when you clear it, Return to automatic, Exit, or the session expires. Daily AI checks and Analyse real stage always use the camera. Test votes are recorded as simulated; no camera image or confidence is created.</p>
+                    <p className="mb-3 text-xs text-muted-foreground">Set how many votes each stage gets (the stage with the most is the one the vote confirms), or save presets and press Use. While maintenance is unlocked, each Camera check on the app's AI Growth Stage page runs the same 30-second AI vote with these votes instead of the camera, submitted in a random order, and the app shows the result as an AI result. Like the daily AI check, the stage changes only after 3 confident checks in a row for the same new stage (any stage, also backwards); the 3rd check sets it on the Arduino when its 30 seconds end. The preset ends when you clear it, Return to automatic, Exit, or the session expires. Daily AI checks and Analyse real stage always use the camera. Test votes are recorded as simulated; no camera image or confidence is created.</p>
                     {(() => {
                       const session = status?.stageSession;
                       const running = !!session && ["starting", "voting", "applying"].includes(session.status);
                       return (
                         <>
-                          <label className="mb-3 block max-w-xs text-sm">Votes for the stage ({VOTES_MIN}–{VOTES_MAX})
-                            <input type="number" min={VOTES_MIN} max={VOTES_MAX} step="1" className={inputClass + " mt-1"} value={voteCount} onChange={(event) => setVoteCount(event.target.value)} />
-                          </label>
-                          {!validVotes(voteCount) && <p className="mb-2 text-xs text-danger">Enter a whole number from {VOTES_MIN} to {VOTES_MAX}.</p>}
-                          {validVotes(voteCount) && Number(voteCount) < MIN_VALID_VOTES && <p className="mb-2 text-xs text-warn">Fewer than {MIN_VALID_VOTES} votes never confirms a stage (same rule as the camera).</p>}
-                          <label className="mb-3 block max-w-xs text-sm">Confidence % (optional, above 0 to 100)
-                            <input type="number" min="0.1" max="100" step="0.1" placeholder="none" className={inputClass + " mt-1"} value={confidenceText} onChange={(event) => setConfidenceText(event.target.value)} />
-                          </label>
-                          {!validConfidence(confidenceText) && <p className="mb-2 text-xs text-danger">Enter a number above 0 and at most 100, or leave it blank.</p>}
-                          {validConfidence(confidenceText) && confidenceText.trim() !== "" && Number(confidenceText) < MIN_CONFIDENCE && <p className="mb-2 text-xs text-warn">Below {MIN_CONFIDENCE}% the result is low confidence and never confirms a stage (same rule as the camera).</p>}
+                          {(() => {
+                            const counts = countsOf(countText);
+                            const countsValid = STAGES.every((stage) => wholeOrBlank(countText[stage]));
+                            const check = judgeCounts(counts);
+                            const ready = countsValid && !check.error && validConfidence(confidenceText);
+                            const confidence = confidenceText.trim() === "" ? null : Number(confidenceText);
+                            return (
+                              <>
+                                <div className="mb-2 grid max-w-md grid-cols-3 gap-2">
+                                  {STAGES.map((stage) => (
+                                    <label key={stage} className="block text-sm">{title(stage)} votes
+                                      <input type="number" min="0" max={VOTES_MAX} step="1" className={inputClass + " mt-1"} value={countText[stage]}
+                                        onChange={(event) => setCountText((prev) => ({ ...prev, [stage]: event.target.value }))} />
+                                    </label>
+                                  ))}
+                                </div>
+                                {!countsValid
+                                  ? <p className="mb-2 text-xs text-danger">Votes must be whole numbers (0 or more).</p>
+                                  : check.error
+                                    ? <p className="mb-2 text-xs text-danger">{check.error}</p>
+                                    : <p className="mb-2 text-xs text-muted-foreground">Total {check.total} votes, submitted in a random order · {title(check.winner)} has the most ({Math.round(check.share * 100)}%).</p>}
+                                {countsValid && !check.error && check.total < MIN_VALID_VOTES && <p className="mb-2 text-xs text-warn">Fewer than {MIN_VALID_VOTES} votes never confirms a stage (same rule as the camera).</p>}
+                                {countsValid && !check.error && check.share < MIN_WINNING_SHARE && <p className="mb-2 text-xs text-warn">{title(check.winner)} has under {MIN_WINNING_SHARE * 100}% of the votes: the result is low confidence and never confirms a stage (same rule as the camera).</p>}
+                                <label className="mb-3 block max-w-xs text-sm">Confidence % (optional, above 0 to 100)
+                                  <input type="number" min="0.1" max="100" step="0.1" placeholder="none" className={inputClass + " mt-1"} value={confidenceText} onChange={(event) => setConfidenceText(event.target.value)} />
+                                </label>
+                                {!validConfidence(confidenceText) && <p className="mb-2 text-xs text-danger">Enter a number above 0 and at most 100, or leave it blank.</p>}
+                                {validConfidence(confidenceText) && confidenceText.trim() !== "" && Number(confidenceText) < MIN_CONFIDENCE && <p className="mb-2 text-xs text-warn">Below {MIN_CONFIDENCE}% the result is low confidence and never confirms a stage (same rule as the camera).</p>}
+                                <div className="mb-3 flex flex-wrap items-end gap-2">
+                                  <label className="block text-sm">Preset name
+                                    <input className={inputClass + " mt-1"} placeholder={check.winner ? `${title(check.winner)} ${check.total}` : "name"} maxLength={40} value={presetName} onChange={(event) => setPresetName(event.target.value)} />
+                                  </label>
+                                  <button className={btn} disabled={busy || !ready} onClick={() => {
+                                    const name = presetName.trim() || `${title(check.winner)} ${check.total}${confidence != null ? ` @ ${confidence}%` : ""}`;
+                                    storePresets([...saved, { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, name, counts, confidence }]);
+                                    setPresetName("");
+                                    setMessage(`Saved preset "${name}". Press Use to set it.`);
+                                  }}>Save as preset</button>
+                                  <button className={btn} disabled={busy || !active || running || !ready} onClick={() => void savePreset({ counts, confidence })}>Use these votes now</button>
+                                </div>
+                              </>
+                            );
+                          })()}
+                          {saved.length > 0 && (
+                            <ul className="mb-3 space-y-2">
+                              {saved.map((preset) => {
+                                const inUse = !!status?.stagePreset && sameCounts(status.stagePreset.counts, preset.counts) && (status.stagePreset.confidence ?? null) === preset.confidence;
+                                return (
+                                  <li key={preset.id} className={`flex flex-wrap items-center gap-2 rounded-lg border p-2 text-sm ${inUse ? "border-primary" : ""}`}>
+                                    <span className="font-semibold">{preset.name}</span>
+                                    <span className="text-xs text-muted-foreground">{countsText(preset.counts)} · {pct(preset.confidence)}</span>
+                                    {inUse && <Pill tone="ok">in use</Pill>}
+                                    <span className="ml-auto flex gap-2">
+                                      <button className={btn} disabled={busy || !active || running} onClick={() => void savePreset(preset)}>Use</button>
+                                      <button className={btn} disabled={busy} onClick={() => {
+                                        setCountText({ STARTER: String(preset.counts.STARTER), GROWER: String(preset.counts.GROWER), FINISHER: String(preset.counts.FINISHER) });
+                                        setConfidenceText(preset.confidence == null ? "" : String(preset.confidence));
+                                        setPresetName(preset.name);
+                                      }}>Load</button>
+                                      <button className={btn} disabled={busy} onClick={() => { if (window.confirm(`Delete preset "${preset.name}"?`)) storePresets(saved.filter((item) => item.id !== preset.id)); }}>Delete</button>
+                                    </span>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          )}
                           <p className="mb-3 text-sm">
                             {status?.stagePreset
-                              ? <>Stored preset: <span className="font-semibold">{title(status.stagePreset.stage)} · {status.stagePreset.votes} votes · {pct(status.stagePreset.confidence)}</span> (used by the next Camera check in the app)</>
+                              ? <>Stored preset: <span className="font-semibold">{title(status.stagePreset.stage)} most · {status.stagePreset.counts ? countsText(status.stagePreset.counts) : `${status.stagePreset.votes} votes`} · {pct(status.stagePreset.confidence)}</span> (used by the next Camera check in the app)</>
                               : "No preset stored: Camera checks in the app use the camera."}
                           </p>
                           {session && session.status !== "idle" && (
@@ -344,11 +434,6 @@ export function Console() {
                             </p>
                           )}
                           <div className="flex flex-wrap gap-2">
-                            {STAGES.map((value) => (
-                              <button key={value} className={btn} disabled={busy || !active || !validVotes(voteCount) || !validConfidence(confidenceText)} onClick={() => void savePreset(value)}>
-                                {`Preset ${title(value)}${current === value ? " (current)" : ""}`}
-                              </button>
-                            ))}
                             <button className={btn} disabled={busy || !status?.stagePreset} onClick={() => void savePreset(null)}>Clear preset</button>
                             <button className={btn} disabled={busy || running || !active} onClick={() => void perform("analyse-real")}>Analyse real stage (camera check)</button>
                           </div>
@@ -389,7 +474,7 @@ export function Console() {
                         {status.manualStageHistory.slice().reverse().map((entry) => (
                           <li key={entry.at}>
                             {new Date(entry.at).toLocaleString()}: {entry.votes != null
-                              ? `${entry.votes} test votes for ${title(entry.stage)}${entry.confidence != null ? ` at ${pct(entry.confidence)}` : ""} · ${SESSION_TEXT[entry.result ?? ""] ?? entry.result ?? "—"}${entry.required ? ` (${entry.confirmations ?? 0}/${entry.required})` : ""}${entry.result === "applied" ? ` (${title(entry.from)} → ${title(entry.to)})` : ""}${entry.error ? ` · ${entry.error}` : ""}`
+                              ? `${entry.counts ? `${countsText(entry.counts)} test votes (${title(entry.stage)} most)` : `${entry.votes} test votes for ${title(entry.stage)}`}${entry.confidence != null ? ` at ${pct(entry.confidence)}` : ""} · ${SESSION_TEXT[entry.result ?? ""] ?? entry.result ?? "—"}${entry.required ? ` (${entry.confirmations ?? 0}/${entry.required})` : ""}${entry.result === "applied" ? ` (${title(entry.from)} → ${title(entry.to)})` : ""}${entry.error ? ` · ${entry.error}` : ""}`
                               : `${title(entry.from)} → ${title(entry.to)} (set here)`}
                           </li>
                         ))}

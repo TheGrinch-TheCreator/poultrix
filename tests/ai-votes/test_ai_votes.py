@@ -99,7 +99,7 @@ class FakePi:
         self.sent = []
         self.ack = ack
         ns = self.ns = {
-            "threading": threading, "time": time, "json": json, "os": __import__("os"), "ai_votes": av,
+            "threading": threading, "time": time, "json": json, "random": __import__("random"), "os": __import__("os"), "ai_votes": av,
             "stage_schedule": ss, "AI_TRANSITION_CONFIRMATIONS_REQUIRED": ss.CONFIRMATIONS_REQUIRED,
             "state": {"stage": stage}, "state_lock": threading.Lock(),
             "ai_state": {"status": "ready", "detectedStage": "Grower", "confidence": 88.5, "confident": True,
@@ -132,7 +132,7 @@ class FakePi:
             self.ns["state"]["stage"] = command.split(":", 1)[1]
         return True
 
-    def run(self, target, votes, cancel_after=None, confidence=None):
+    def run(self, target, votes, cancel_after=None, confidence=None, counts=None):
         """Like the route: take the cycle lock, then run the session."""
         assert self.ns["ai_cycle_lock"].acquire(blocking=False)
         if cancel_after is not None:
@@ -141,7 +141,7 @@ class FakePi:
                 with self.ns["bypass_lock"]:
                     self.ns["bypass_token"] = None  # Exit bypass
             threading.Thread(target=cancel, daemon=True).start()
-        self.ns["run_simulated_vote_session"](target, votes, "tok", "ip:test", confidence)
+        self.ns["run_simulated_vote_session"](target, votes, "tok", "ip:test", confidence, counts)
         return self.ns["stage_session_snapshot"]()
 
     def runs(self, target, votes, times, confidence=None):
@@ -450,6 +450,72 @@ class PresetConfidence(unittest.TestCase):
         session = self.pi.run("GROWER", 30)
         self.assertEqual((session["result"], self.pi.ns["ai_state"]["confidence"]), ("unchanged", None))
         self.assertIsNone(self.pi.history()[-1]["confidence"])
+
+
+class MixedPreset(unittest.TestCase):
+    """Votes per stage (owner, 2026-11-26): the stage with the most votes wins,
+    and the votes arrive in a random order."""
+
+    def test_parse(self):
+        self.assertEqual(av.parse_vote_counts({"STARTER": 2, "GROWER": 17, "FINISHER": 9}),
+                         ("GROWER", {"Starter": 2, "Grower": 17, "Finisher": 9}, 28))
+        self.assertEqual(av.parse_vote_counts({"finisher": 30.0}), ("FINISHER", {"Starter": 0, "Grower": 0, "Finisher": 30}, 30))
+        for bad in ({"GROWER": 10, "FINISHER": 10}, {}, {"GROWER": 0}, {"GROWER": 301}, {"GROWER": 200, "STARTER": 101},
+                    {"GROWER": -1, "STARTER": 5}, {"GROWER": 2.5}, {"GROWER": True}, {"GROWER": "5"}, {"CHICK": 5}, [5], 5):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                av.parse_vote_counts(bad)
+
+    def test_sequence_is_shuffled_with_the_right_counts(self):
+        import random
+        counts = {"Starter": 2, "Grower": 17, "Finisher": 9}
+        sequence = av.vote_sequence(counts, random.Random(1))
+        self.assertEqual({name: sequence.count(name) for name in av.STAGE_NAMES}, counts)
+        ordered = sorted(sequence, key=av.STAGE_NAMES.index)
+        self.assertNotEqual(sequence, ordered)
+        self.assertNotEqual(sequence, ordered[::-1])
+
+    def test_jittered_offsets_stay_in_order_inside_the_window(self):
+        import random
+        offsets = av.vote_offsets(28, 30, random.Random(2))
+        self.assertEqual((len(offsets), offsets[0]), (28, 0))
+        self.assertTrue(all(0 <= a < b < 30 for a, b in zip(offsets, offsets[1:])))
+        self.assertNotEqual(offsets, av.vote_offsets(28, 30))
+
+    def test_mixed_votes_confirm_the_top_stage(self):
+        pi = FakePi(stage="STARTER")
+        try:
+            counts = {"Starter": 2, "Grower": 17, "Finisher": 9}
+            results = [pi.run("GROWER", 28, counts=counts, confidence=85)["result"]
+                       for _ in range(ss.CONFIRMATIONS_REQUIRED)]
+            self.assertEqual(results, ["pending"] * (ss.CONFIRMATIONS_REQUIRED - 1) + ["applied"])
+            self.assertEqual(pi.ns["ai_state"]["votes"], counts)
+            self.assertEqual((pi.ns["ai_state"]["detectedStage"], pi.ns["ai_state"]["framesAnalyzed"]), ("Grower", 28))
+            self.assertEqual(pi.ns["state"]["stage"], "GROWER")
+            entry = pi.history()[-1]
+            self.assertEqual((entry["counts"], entry["votes"], entry["source"]), (counts, 28, av.SOURCE_SIMULATED))
+        finally:
+            pi.close()
+
+    def test_a_split_vote_is_low_confidence_like_the_camera(self):
+        pi = FakePi(stage="STARTER")
+        try:
+            # 12 of 30 is below the 60 % winning share: never confirms.
+            session = pi.run("GROWER", 30, counts={"Starter": 9, "Grower": 12, "Finisher": 9})
+            self.assertEqual(session["result"], "not_confirmed")
+            self.assertEqual(pi.ns["ai_state"]["status"], "low_confidence")
+        finally:
+            pi.close()
+
+    def test_preset_check_passes_the_counts(self):
+        pi = FakePi(stage="GROWER")
+        try:
+            counts = {"Starter": 1, "Grower": 3, "Finisher": 20}
+            pi.ns["stage_preset"] = {"stage": "FINISHER", "votes": 24, "counts": counts, "confidence": None,
+                                     "setAt": "t", "by": "ip:test", "token": "tok"}
+            result = pi.ns["run_preset_camera_check"](pi.ns["active_stage_preset"](), "owner@example")
+            self.assertEqual((result["votes"], result["detectedStage"], result["framesAnalyzed"]), (counts, "Finisher", 24))
+        finally:
+            pi.close()
 
 
 def function_body(src, name):
