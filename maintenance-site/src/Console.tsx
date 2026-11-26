@@ -51,7 +51,8 @@ const MIN_WINNING_SHARE = 0.6; // AI_MIN_WINNING_VOTE_FRACTION on the Pi
 type StageKey = (typeof STAGES)[number];
 type VoteCounts = Record<StageKey, number>;
 // Saved presets live in this browser (owner, 2026-11-26); "Use" stores one on the Pi.
-type SavedPreset = { id: string; name: string; counts: VoteCounts; confidence: number | null };
+// category: the filter the owner put it in; missing means Auto (sorted by its votes).
+type SavedPreset = { id: string; name: string; counts: VoteCounts; confidence: number | null; category?: Outcome | undefined };
 const PRESETS_KEY = "poultrix-maintenance-stage-presets";
 const wholeOrBlank = (value: string) => value.trim() === "" || /^\d+$/.test(value.trim());
 const countsOf = (text: Record<StageKey, string>): VoteCounts =>
@@ -78,6 +79,26 @@ function outcomeOf(counts: VoteCounts, confidence: number | null): Outcome {
   return confident && check.winner ? check.winner : "NONE";
 }
 const outcomeText = (outcome: Outcome) => (outcome === "TIE" ? "Tie" : outcome === "NONE" ? "No result" : title(outcome));
+// Filters: a stage filter shows every preset where that stage has the most votes, even a
+// low-confidence one (owner, 2026-11-26); "No result" shows the low-confidence ones too.
+function matchesFilter(counts: VoteCounts, confidence: number | null, filter: Outcome | "ALL") {
+  if (filter === "ALL") return true;
+  const check = judgeCounts(counts);
+  if (filter === "TIE") return check.tie;
+  if (filter === "NONE") return outcomeOf(counts, confidence) === "NONE";
+  return check.winner === filter;
+}
+function presetMatches(preset: SavedPreset, filter: Outcome | "ALL") {
+  if (preset.category) return filter === "ALL" || filter === preset.category;
+  return matchesFilter(preset.counts, preset.confidence, filter);
+}
+// "Finisher most" plus the result when it is not that stage.
+function presetLabel(counts: VoteCounts, confidence: number | null) {
+  const check = judgeCounts(counts);
+  if (check.tie) return "Tie";
+  const outcome = outcomeOf(counts, confidence);
+  return outcome === "NONE" ? `${title(check.winner)} most · no result (low confidence)` : title(outcome);
+}
 // Pi results use "Starter" keys, saved presets use "STARTER".
 const countOf = (counts: Partial<Record<string, number>> | undefined, stage: StageKey) => counts?.[stage] ?? counts?.[title(stage)] ?? 0;
 const countsText = (counts: Partial<Record<string, number>> | undefined) =>
@@ -121,6 +142,7 @@ export function Console() {
   const [saved, setSaved] = useState<SavedPreset[]>(loadPresets);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [filter, setFilter] = useState<Outcome | "ALL">("ALL");
+  const [category, setCategory] = useState<Outcome | "AUTO">("AUTO");
   function storePresets(next: SavedPreset[]) {
     setSaved(next);
     try { localStorage.setItem(PRESETS_KEY, JSON.stringify(next)); } catch { /* storage unavailable */ }
@@ -415,37 +437,43 @@ export function Console() {
                                 {!validConfidence(confidenceText) && <p className="mb-2 text-xs text-danger">Enter a number above 0 and at most 100, or leave it blank.</p>}
                                 {validConfidence(confidenceText) && confidenceText.trim() !== "" && Number(confidenceText) < MIN_CONFIDENCE && <p className="mb-2 text-xs text-warn">Below {MIN_CONFIDENCE}% the result is low confidence and never confirms a stage (same rule as the camera).</p>}
                                 <div className="mb-3 flex flex-wrap items-end gap-2">
+                                  <label className="block text-sm">Filter
+                                    <select className={inputClass + " mt-1"} value={category} onChange={(event) => setCategory(event.target.value as Outcome | "AUTO")}>
+                                      <option value="AUTO">Auto (by votes)</option>
+                                      {OUTCOME_FILTERS.filter((item) => item.key !== "ALL").map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
+                                    </select>
+                                  </label>
                                   <label className="block text-sm">Preset name
                                     <input className={inputClass + " mt-1"} placeholder={defaultName} maxLength={40} value={presetName} onChange={(event) => setPresetName(event.target.value)} />
                                   </label>
                                   {editing && (
                                     <button className={btn} disabled={busy || !ready} onClick={() => {
                                       const name = presetName.trim() || defaultName;
-                                      storePresets(saved.map((item) => (item.id === editing.id ? { ...item, name, counts, confidence } : item)));
+                                      storePresets(saved.map((item) => (item.id === editing.id ? { ...item, name, counts, confidence, category: category === "AUTO" ? undefined : category } : item)));
                                       setMessage(`Saved changes to "${name}".${inUseNow(editing) ? " It is the stored preset: press Use to send the new votes to the Pi." : ""}`);
                                     }}>Save changes to "{editing.name}"</button>
                                   )}
                                   <button className={btn} disabled={busy || !ready} onClick={() => {
                                     const name = presetName.trim() || defaultName;
                                     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-                                    storePresets([...saved, { id, name, counts, confidence }]);
+                                    storePresets([...saved, { id, name, counts, confidence, ...(category === "AUTO" ? {} : { category }) }]);
                                     setEditingId(id);
                                     setPresetName(name);
                                     setMessage(`Saved preset "${name}". Press Use to set it.`);
                                   }}>{editing ? "Save as new preset" : "Save as preset"}</button>
-                                  {editing && <button className={btn} disabled={busy} onClick={() => { setEditingId(null); setPresetName(""); }}>Stop editing</button>}
+                                  {editing && <button className={btn} disabled={busy} onClick={() => { setEditingId(null); setPresetName(""); setCategory("AUTO"); }}>Stop editing</button>}
                                   <button className={btn} disabled={busy || !active || running || !ready} onClick={() => void savePreset({ counts, confidence })}>Use these votes now</button>
                                 </div>
                               </>
                             );
                           })()}
                           {saved.length > 0 && (() => {
-                            const visible = saved.filter((preset) => filter === "ALL" || outcomeOf(preset.counts, preset.confidence) === filter);
+                            const visible = saved.filter((preset) => presetMatches(preset, filter));
                             return (
                               <>
                                 <div className="mb-2 flex flex-wrap gap-1" role="group" aria-label="Filter presets by result">
                                   {OUTCOME_FILTERS.map(({ key, label }) => {
-                                    const count = key === "ALL" ? saved.length : saved.filter((preset) => outcomeOf(preset.counts, preset.confidence) === key).length;
+                                    const count = key === "ALL" ? saved.length : saved.filter((preset) => presetMatches(preset, key)).length;
                                     return (
                                       <button key={key} aria-pressed={filter === key} className={`${btn} px-2 py-1 text-xs ${filter === key ? "bg-muted" : ""}`} onClick={() => setFilter(key)}>
                                         {label} ({count})
@@ -453,7 +481,7 @@ export function Console() {
                                     );
                                   })}
                                 </div>
-                                {visible.length === 0 && <p className="mb-3 text-xs text-muted-foreground">No saved presets end in {outcomeText(filter as Outcome)}.</p>}
+                                {visible.length === 0 && <p className="mb-3 text-xs text-muted-foreground">No saved presets in {OUTCOME_FILTERS.find((item) => item.key === filter)?.label}.</p>}
                                 <ul className="mb-3 space-y-2">
                                   {visible.map((preset, index) => {
                                     const inUse = inUseNow(preset);
@@ -464,7 +492,7 @@ export function Console() {
                                           <button className="px-1 text-xs leading-none disabled:opacity-30" aria-label={`Move ${preset.name} down`} disabled={busy || index === visible.length - 1} onClick={() => { const other = visible[index + 1]; if (other) movePreset(preset.id, other.id); }}>▼</button>
                                         </span>
                                         <span className="font-semibold">{preset.name}</span>
-                                        <span className="text-xs text-muted-foreground">{countsText(preset.counts)} · {pct(preset.confidence)} · {outcomeText(outcomeOf(preset.counts, preset.confidence))}</span>
+                                        <span className="text-xs text-muted-foreground">{countsText(preset.counts)} · {pct(preset.confidence)} · {presetLabel(preset.counts, preset.confidence)}{preset.category ? ` · filed under ${OUTCOME_FILTERS.find((item) => item.key === preset.category)?.label}` : ""}</span>
                                         {inUse && <Pill tone="ok">in use</Pill>}
                                         {editingId === preset.id && <Pill tone="info">editing</Pill>}
                                         <span className="ml-auto flex gap-2">
@@ -473,6 +501,7 @@ export function Console() {
                                             setCountText({ STARTER: String(preset.counts.STARTER), GROWER: String(preset.counts.GROWER), FINISHER: String(preset.counts.FINISHER) });
                                             setConfidenceText(preset.confidence == null ? "" : String(preset.confidence));
                                             setPresetName(preset.name);
+                                            setCategory(preset.category ?? "AUTO");
                                             setEditingId(preset.id);
                                           }}>Load</button>
                                           <button className={btn} disabled={busy} onClick={() => {
