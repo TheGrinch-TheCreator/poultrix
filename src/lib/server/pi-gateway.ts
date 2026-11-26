@@ -81,6 +81,8 @@ const ROUTES: readonly PiRoute[] = [
   { path: "/bypass/stage-preset", upstream: "/api/bypass/stage-preset", methods: POST, maintenance: true },
   // Saved stage presets and their orders, shared by every maintenance device (whole list per save).
   { path: "/bypass/stage-library", upstream: "/api/bypass/stage-library", methods: BOTH, maintenance: true, maxBodyBytes: 65_536 },
+  { path: "/bypass/ai-checks", upstream: "/api/bypass/ai-checks", methods: POST, maintenance: true },
+  { path: "/bypass/ai-checks/delete", upstream: "/api/bypass/ai-checks/delete", methods: POST, maintenance: true },
   // Trough calibration takes 10 readings at 2 s each (SPEC-auto-feeding A2).
   { path: "/bypass/trough-zero", upstream: "/api/bypass/trough-zero", methods: POST, maintenance: true, timeoutMs: SLOW_MS },
   { path: "/bypass/trough-check", upstream: "/api/bypass/trough-check", methods: POST, maintenance: true, timeoutMs: SLOW_MS },

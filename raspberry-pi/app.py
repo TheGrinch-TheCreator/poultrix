@@ -4381,6 +4381,68 @@ def api_history():
     except (ValueError, _history_sqlite3.Error) as exc:
         return jsonify(error=str(exc)), 500
 
+HISTORY_PAGE_SIZE = 50
+
+
+def _ai_check_row(row):
+    return {"id": row["id"], "recordedAt": row["recorded_at"], "stage": row["detected_stage"],
+            "confidence": row["confidence_pct"], "status": row["status"],
+            "source": row["source"] or ai_votes.SOURCE_CAMERA}
+
+
+@app.route("/api/bypass/ai-checks", methods=["POST"])
+def bypass_ai_checks():
+    """Maintenance: the AI-check history, newest first, HISTORY_PAGE_SIZE at a
+    time. Body {before?: id} gives the page older than that id."""
+    if not bypass_authorized():
+        return jsonify(error="Unauthorized"), 403
+    body = request.get_json(silent=True) or {}
+    before = body.get("before")
+    if before is not None and (isinstance(before, bool) or not isinstance(before, int) or before < 1):
+        return jsonify(error="before must be a check id"), 400
+    try:
+        conn = _history_connection()
+        try:
+            conn.row_factory = _history_sqlite3.Row
+            rows = conn.execute(
+                "SELECT id, recorded_at, detected_stage, confidence_pct, status, source FROM ai_checks "
+                "WHERE id < ? ORDER BY id DESC LIMIT ?",
+                (before if before is not None else 2 ** 62, HISTORY_PAGE_SIZE + 1)).fetchall()
+            total = conn.execute("SELECT count(*) FROM ai_checks").fetchone()[0]
+        finally:
+            conn.close()
+    except _history_sqlite3.Error as exc:
+        return jsonify(error=f"Could not read the history: {exc}"), 500
+    return jsonify(checks=[_ai_check_row(row) for row in rows[:HISTORY_PAGE_SIZE]],
+                   more=len(rows) > HISTORY_PAGE_SIZE, total=total)
+
+
+@app.route("/api/bypass/ai-checks/delete", methods=["POST"])
+def bypass_ai_checks_delete():
+    """Maintenance: delete AI checks from the history (owner, 2026-11-26).
+    Body {ids: [id, ...]}. Only the history rows go; the live AI result, the
+    confirmed stage and stage_manual.json are unchanged."""
+    if not bypass_authorized():
+        return jsonify(error="Unauthorized"), 403
+    body = request.get_json(silent=True) or {}
+    try:
+        ids = ai_votes.parse_check_ids(body.get("ids"))
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    try:
+        conn = _history_connection()
+        try:
+            with conn:
+                deleted = conn.execute(f"DELETE FROM ai_checks WHERE id IN ({','.join('?' for _ in ids)})",
+                                       ids).rowcount
+        finally:
+            conn.close()
+    except _history_sqlite3.Error as exc:
+        return jsonify(error=f"Could not delete: {exc}"), 500
+    _agreeing_history_cache.update(at=0.0)  # the last agreeing detection may have been deleted
+    print(f"[AUDIT] deleted {deleted} AI check(s) from history {ids} by {request_user()}", flush=True)
+    return jsonify(deleted=deleted)
+
 # ============================================================
 # SHARED ALERT ACKNOWLEDGEMENTS (private VPC endpoint)
 # These endpoints are not intended to be exposed publicly. The Worker

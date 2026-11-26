@@ -225,3 +225,20 @@ def vote_offsets(count, duration_seconds, rng=None):
     if rng is None:
         return [step * index for index in range(count)]
     return [0.0] + [step * (index + rng.uniform(-0.35, 0.35)) for index in range(1, count)]
+
+
+HISTORY_DELETE_MAX = 100  # AI checks deleted in one request from the maintenance site
+
+
+def parse_check_ids(value):
+    """The AI-check history rows to delete (owner, 2026-11-26): a list of 1 to
+    HISTORY_DELETE_MAX positive whole-number ids. Returns them unique and
+    sorted; raises ValueError."""
+    if not isinstance(value, list) or not 1 <= len(value) <= HISTORY_DELETE_MAX:
+        raise ValueError(f"Choose 1 to {HISTORY_DELETE_MAX} checks to delete")
+    ids = set()
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, int) or item < 1:
+            raise ValueError("Check ids must be positive whole numbers")
+        ids.add(item)
+    return sorted(ids)

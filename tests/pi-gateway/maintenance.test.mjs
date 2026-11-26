@@ -32,10 +32,12 @@ const run = async (name, request, want, extra) => {
   ok(name, r.status === want && (!extra || extra(r, t)), `-> ${r.status} ${t.slice(0, 80)}`);
 };
 
-ok("maintenance table = bypass/* + camera + snapshot", MAINTENANCE_ROUTES.every((r) => r.maintenance || ["/camera/stream", "/camera/live", "/snapshot"].includes(r.path)) && MAINTENANCE_ROUTES.length === 16, `(${MAINTENANCE_ROUTES.length} routes)`);
+ok("maintenance table = bypass/* + camera + snapshot", MAINTENANCE_ROUTES.every((r) => r.maintenance || ["/camera/stream", "/camera/live", "/snapshot"].includes(r.path)) && MAINTENANCE_ROUTES.length === 18, `(${MAINTENANCE_ROUTES.length} routes)`);
 ok("maintenance table has no system power routes", !MAINTENANCE_ROUTES.some((r) => r.path.startsWith("/system/reboot") || r.path.startsWith("/system/power-off")));
 ok("app table has no bypass routes (M3)", !APP_ROUTES.some((r) => r.path.startsWith("/bypass/")) && APP_ROUTES.length === 28, `(${APP_ROUTES.length} routes)`);
 await run("stage-library allows a large preset list", req("/api/pi/bypass/stage-library", { method: "POST", headers: { "x-poultrix-maintenance": "good-token" }, body: JSON.stringify({ presets: "x".repeat(20_000) }) }), 200);
+await run("ai-checks/delete is forwarded", req("/api/pi/bypass/ai-checks/delete", { method: "POST", headers: { "x-poultrix-maintenance": "good-token" }, body: JSON.stringify({ ids: [1] }) }), 200);
+await run("ai-checks/delete is POST only", req("/api/pi/bypass/ai-checks/delete", { headers: { "x-poultrix-maintenance": "good-token" } }), 405);
 await run("stage-library still has a limit", req("/api/pi/bypass/stage-library", { method: "POST", headers: { "x-poultrix-maintenance": "good-token" }, body: "x".repeat(70_000) }), 413);
 await run("other routes keep the 4 KB limit", req("/api/pi/bypass/stage-preset", { method: "POST", headers: { "x-poultrix-maintenance": "good-token" }, body: "x".repeat(5_000) }), 413);
 await run("feeding route not exposed", req("/api/pi/feeding/manual/start", { method: "POST", body: "{}" }), 404);

@@ -630,6 +630,70 @@ class PresetLibrary(unittest.TestCase):
                 av.parse_preset_library(bad)
 
 
+class HistoryDelete(unittest.TestCase):
+    """Maintenance: list and delete AI checks in the Pi's history database."""
+
+    def test_parse_check_ids(self):
+        self.assertEqual(av.parse_check_ids([5, 3, 5]), [3, 5])
+        for bad in (None, [], [0], [-1], [True], ["3"], [1.5], list(range(1, av.HISTORY_DELETE_MAX + 2))):
+            with self.assertRaises(ValueError, msg=repr(bad)[:60]):
+                av.parse_check_ids(bad)
+
+    def setUp(self):
+        import sqlite3
+        self.dir = tempfile.TemporaryDirectory()
+        db = pathlib.Path(self.dir.name) / "h.sqlite3"
+        conn = sqlite3.connect(db)
+        conn.execute("CREATE TABLE ai_checks (id INTEGER PRIMARY KEY AUTOINCREMENT, recorded_at TEXT NOT NULL, "
+                     "detected_stage TEXT, confidence_pct REAL, status TEXT, source TEXT)")
+        for i in range(1, 61):
+            conn.execute("INSERT INTO ai_checks (recorded_at, detected_stage, confidence_pct, status, source) "
+                         "VALUES (?, 'Grower', 90, 'ready', ?)", (f"2026-11-26T00:{i:02d}", None if i % 2 else "bypass_simulation"))
+        conn.commit()
+        conn.close()
+        self.body = {}
+        src = (PI / "app.py").read_text(encoding="utf-8")
+        test = self
+
+        class Request:
+            def get_json(self, silent=False):
+                return test.body
+
+        class App:
+            def route(self, *args, **kwargs):
+                return lambda fn: fn
+
+        self.ns = {"app": App(), "request": Request(), "jsonify": lambda **kw: kw, "bypass_authorized": lambda: True,
+                   "_history_connection": lambda: sqlite3.connect(db), "_history_sqlite3": sqlite3,
+                   "request_user": lambda: "test", "_agreeing_history_cache": {"at": 99.0}, "ai_votes": av}
+        exec(src[src.index("HISTORY_PAGE_SIZE = 50"):src.index("# SHARED ALERT ACKNOWLEDGEMENTS")], self.ns)
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_pages_newest_first(self):
+        page = self.ns["bypass_ai_checks"]()
+        self.assertEqual([c["id"] for c in page["checks"]][:2], [60, 59])
+        self.assertEqual((len(page["checks"]), page["more"], page["total"]), (50, True, 60))
+        self.assertEqual(page["checks"][1]["source"], "camera")  # NULL source = camera
+        self.body = {"before": 11}
+        page = self.ns["bypass_ai_checks"]()
+        self.assertEqual(([c["id"] for c in page["checks"]], page["more"]), (list(range(10, 0, -1)), False))
+        self.body = {"before": "x"}
+        self.assertEqual(self.ns["bypass_ai_checks"]()[1], 400)
+
+    def test_delete_only_the_chosen_rows(self):
+        self.body = {"ids": [60, 2, 999]}
+        self.assertEqual(self.ns["bypass_ai_checks_delete"](), {"deleted": 2})
+        self.assertEqual(self.ns["_agreeing_history_cache"]["at"], 0.0)
+        self.body = {}
+        page = self.ns["bypass_ai_checks"]()
+        self.assertEqual(page["total"], 58)
+        self.assertEqual(page["checks"][0]["id"], 59)
+        self.body = {"ids": []}
+        self.assertEqual(self.ns["bypass_ai_checks_delete"]()[1], 400)
+
+
 def function_body(src, name):
     """Source of one top-level function in app.py."""
     node = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name == name)

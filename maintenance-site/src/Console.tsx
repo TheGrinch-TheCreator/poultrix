@@ -734,6 +734,8 @@ export function Console() {
                 );
               })()}
             </Card>
+
+            <AiHistoryCard token={token} onExpired={() => clearSession("Maintenance session expired or revoked. Enter the bypass password again.")} />
           </>
         )}
         <p role="status" className="text-sm text-muted-foreground">{message}</p>
@@ -748,6 +750,108 @@ function Stat({ label, value }: { label: string; value: string }) {
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className="mt-1 font-semibold tabular-nums">{value}</div>
     </div>
+  );
+}
+
+type AiCheck = { id: number; recordedAt: string; stage: string | null; confidence: number | null; status: string | null; source: string };
+type AiCheckPage = { checks: AiCheck[]; more: boolean; total: number };
+
+/** AI-check history on the Pi (what the app's History page shows): delete
+ *  chosen rows. Only the history goes; the current AI result and stage stay. */
+function AiHistoryCard({ token, onExpired }: { token: string; onExpired: () => void }) {
+  const [checks, setChecks] = useState<AiCheck[]>([]);
+  const [more, setMore] = useState(false);
+  const [total, setTotal] = useState<number | null>(null);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+
+  async function load(before?: number) {
+    setBusy(true);
+    try {
+      const page = await piRequest<AiCheckPage>("/bypass/ai-checks", { token, method: "POST", body: before ? { before } : {} });
+      setChecks((prev) => (before ? [...prev, ...page.checks] : page.checks));
+      setMore(page.more);
+      setTotal(page.total);
+      if (!before) setSelected(new Set());
+      setNote("");
+    } catch (error) {
+      if (sessionExpired(error)) onExpired();
+      else setNote(`Could not load the history: ${error instanceof Error ? error.message : String(error)}`);
+    } finally { setBusy(false); }
+  }
+
+  async function remove(ids: number[]) {
+    if (ids.length === 0) return;
+    if (!window.confirm(`Delete ${ids.length} AI check${ids.length === 1 ? "" : "s"} from the history? This can't be undone.`)) return;
+    setBusy(true);
+    try {
+      let deleted = 0;
+      for (let start = 0; start < ids.length; start += 100) {
+        const result = await piRequest<{ deleted: number }>("/bypass/ai-checks/delete", { token, method: "POST", body: { ids: ids.slice(start, start + 100) } });
+        deleted += result.deleted;
+      }
+      const gone = new Set(ids);
+      setChecks((prev) => prev.filter((check) => !gone.has(check.id)));
+      setSelected((prev) => new Set([...prev].filter((id) => !gone.has(id))));
+      setTotal((prev) => (prev == null ? prev : prev - deleted));
+      setNote(`Deleted ${deleted} AI check${deleted === 1 ? "" : "s"} from the history.`);
+    } catch (error) {
+      if (sessionExpired(error)) onExpired();
+      else setNote(`Could not delete: ${error instanceof Error ? error.message : String(error)}`);
+    } finally { setBusy(false); }
+  }
+
+  useEffect(() => {
+    if (token) void load();
+    // Load once per login; Refresh reloads.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  const toggle = (id: number) => setSelected((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const allShown = checks.length > 0 && checks.every((check) => selected.has(check.id));
+  const last = checks[checks.length - 1];
+
+  return (
+    <Card>
+      <CardTitle>AI check history</CardTitle>
+      <p className="my-2 text-xs text-muted-foreground">
+        The AI checks saved on the Raspberry Pi (the app's History page). Deleting removes them from the history only: the current AI result, the confirmed stage and the stage changes above stay as they are.
+      </p>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <button className={btn} disabled={busy} onClick={() => void load()}>Refresh</button>
+        <button className={btn} disabled={busy || checks.length === 0} onClick={() => setSelected(allShown ? new Set() : new Set(checks.map((check) => check.id)))}>
+          {allShown ? "Select none" : "Select all shown"}
+        </button>
+        <button className={btn + " border-danger text-danger"} disabled={busy || selected.size === 0} onClick={() => void remove([...selected])}>
+          Delete selected ({selected.size})
+        </button>
+        <span className="text-xs text-muted-foreground">{total != null ? `${checks.length} of ${total} shown` : ""}</span>
+      </div>
+      {checks.length === 0
+        ? <p className="text-sm text-muted-foreground">{busy ? "Loading…" : "No AI checks in the history."}</p>
+        : (
+          <ul className="mb-3 max-h-96 divide-y overflow-y-auto rounded-lg border">
+            {checks.map((check) => (
+              <li key={check.id} className="flex flex-wrap items-center gap-2 px-2 py-1.5 text-sm">
+                <input type="checkbox" aria-label={`Select check ${check.id}`} checked={selected.has(check.id)} onChange={() => toggle(check.id)} />
+                <span className="tabular-nums text-xs text-muted-foreground">#{check.id}</span>
+                <span className="tabular-nums">{new Date(check.recordedAt).toLocaleString()}</span>
+                <span className="font-semibold">{check.stage ? title(check.stage.toUpperCase()) : "—"}</span>
+                <span className="text-xs text-muted-foreground">{pct(check.confidence)} · {check.status ?? "—"}</span>
+                {check.source === "bypass_simulation" && <Pill tone="warn">simulated</Pill>}
+                <button className={btn + " ml-auto px-2 py-1 text-xs"} disabled={busy} onClick={() => void remove([check.id])}>Delete</button>
+              </li>
+            ))}
+          </ul>
+        )}
+      {more && last && <button className={btn} disabled={busy} onClick={() => void load(last.id)}>Load older</button>}
+      {note && <p role="status" className="mt-2 text-sm">{note}</p>}
+    </Card>
   );
 }
 
