@@ -194,22 +194,39 @@ export function Console() {
   const remoteRevision = status?.stageLibraryRevision;
   useEffect(() => {
     if (!token || loadingLibrary.current) return;
-    if (library && (remoteRevision === undefined || remoteRevision === library.revision)) return;
+    // Reload only when the Pi has a newer revision: right after this device saves, the last status poll is still older.
+    if (library && (remoteRevision === undefined || remoteRevision <= library.revision)) return;
     loadingLibrary.current = true;
     void (async () => {
       try {
         let loaded = await piRequest<PresetLibrary>("/bypass/stage-library", { token });
         const local = loadLocalPresets();
-        if (loaded.revision === 0 && loaded.presets.length === 0 && local.length > 0) {
-          // First time on the Pi: upload this browser's presets and orders, then keep them only as a backup.
-          loaded = await piRequest<PresetLibrary>("/bypass/stage-library", { token, method: "POST", body: { presets: local, orders: loadLocalOrders(), revision: 0 } });
+        if (local.length > 0) {
+          // This browser still has presets from before they moved to the Pi: add the ones the Pi
+          // lacks, in this browser's order (each filter's too), then keep them only as a backup.
+          const onPi = new Set(loaded.presets.map((preset) => preset.id));
+          const added = local.filter((preset) => preset && typeof preset.id === "string" && !onPi.has(preset.id));
+          if (added.length > 0) {
+            const localOrders = loadLocalOrders();
+            const mergedOrders: FilterOrders = { ...loaded.orders };
+            for (const [key, ids] of Object.entries(localOrders)) {
+              if (!Array.isArray(ids) || !OUTCOME_FILTERS.some((item) => item.key === key && key !== "ALL")) continue;
+              const current = mergedOrders[key as Outcome] ?? [];
+              mergedOrders[key as Outcome] = [...current, ...ids.filter((id) => !current.includes(id))];
+            }
+            loaded = await piRequest<PresetLibrary>("/bypass/stage-library", {
+              token, method: "POST", body: { presets: [...loaded.presets, ...added], orders: mergedOrders, revision: loaded.revision },
+            });
+          }
           try {
             localStorage.setItem(`${PRESETS_KEY}-backup`, localStorage.getItem(PRESETS_KEY) ?? "[]");
             localStorage.setItem(`${ORDERS_KEY}-backup`, localStorage.getItem(ORDERS_KEY) ?? "{}");
             localStorage.removeItem(PRESETS_KEY);
             localStorage.removeItem(ORDERS_KEY);
           } catch { /* storage unavailable */ }
-          setMessage(`Moved ${local.length} saved preset${local.length === 1 ? "" : "s"} from this browser to the Raspberry Pi; every device now sees them in the same order.`);
+          setMessage(added.length > 0
+            ? `Moved ${added.length} saved preset${added.length === 1 ? "" : "s"} from this browser to the Raspberry Pi; every device now sees them in the same order.`
+            : "This browser's saved presets are already on the Raspberry Pi.");
         }
         setLibrary(loaded);
       } catch (error) {
