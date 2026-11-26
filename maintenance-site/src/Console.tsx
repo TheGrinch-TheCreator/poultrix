@@ -54,6 +54,10 @@ type VoteCounts = Record<StageKey, number>;
 // category: the filter the owner put it in; missing means Auto (sorted by its votes).
 type SavedPreset = { id: string; name: string; counts: VoteCounts; confidence: number | null; category?: Outcome | undefined };
 const PRESETS_KEY = "poultrix-maintenance-stage-presets";
+// Each filter keeps its own order (owner, 2026-11-26). "All" is the saved list's own order;
+// the others are preset ids in this key. A preset missing from a filter's order goes last.
+const ORDERS_KEY = "poultrix-maintenance-stage-preset-orders";
+type FilterOrders = Partial<Record<Outcome, string[]>>;
 const wholeOrBlank = (value: string) => value.trim() === "" || /^\d+$/.test(value.trim());
 const countsOf = (text: Record<StageKey, string>): VoteCounts =>
   ({ STARTER: Number(text.STARTER || 0), GROWER: Number(text.GROWER || 0), FINISHER: Number(text.FINISHER || 0) });
@@ -111,6 +115,12 @@ function loadPresets(): SavedPreset[] {
     return Array.isArray(value) ? value : [];
   } catch { return []; }
 }
+function loadOrders(): FilterOrders {
+  try {
+    const value = JSON.parse(localStorage.getItem(ORDERS_KEY) || "{}");
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  } catch { return {}; }
+}
 type Snapshot = {
   status?: {
     connected?: boolean; piSeenByArduino?: boolean | null; operatingStatus?: string; stage?: string;
@@ -143,6 +153,11 @@ export function Console() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [filter, setFilter] = useState<Outcome | "ALL">("ALL");
   const [category, setCategory] = useState<Outcome | "AUTO">("AUTO");
+  const [orders, setOrders] = useState<FilterOrders>(loadOrders);
+  function storeOrders(next: FilterOrders) {
+    setOrders(next);
+    try { localStorage.setItem(ORDERS_KEY, JSON.stringify(next)); } catch { /* storage unavailable */ }
+  }
   function storePresets(next: SavedPreset[]) {
     setSaved(next);
     try { localStorage.setItem(PRESETS_KEY, JSON.stringify(next)); } catch { /* storage unavailable */ }
@@ -188,16 +203,23 @@ export function Console() {
 
   const inUseNow = (preset: SavedPreset) =>
     !!status?.stagePreset && sameCounts(status.stagePreset.counts, preset.counts) && (status.stagePreset.confidence ?? null) === preset.confidence;
-  // Swaps two presets in the saved order (the neighbour shown in the current filter).
-  function movePreset(id: string, otherId: string) {
-    const next = [...saved];
-    const a = next.findIndex((item) => item.id === id);
-    const b = next.findIndex((item) => item.id === otherId);
-    const first = next[a], second = next[b];
+  // The presets shown under a filter, in that filter's own order.
+  function presetsIn(view: Outcome | "ALL"): SavedPreset[] {
+    const shown = saved.filter((preset) => presetMatches(preset, view));
+    if (view === "ALL") return shown;
+    const order = orders[view] ?? [];
+    const rank = (id: string) => { const at = order.indexOf(id); return at < 0 ? Number.MAX_SAFE_INTEGER : at; };
+    return shown.sort((a, b) => rank(a.id) - rank(b.id));
+  }
+  // Moves a preset one place up (-1) or down (+1) in the current filter only.
+  function movePreset(shown: SavedPreset[], index: number, step: -1 | 1) {
+    const next = [...shown];
+    const first = next[index], second = next[index + step];
     if (!first || !second) return;
-    next[a] = second;
-    next[b] = first;
-    storePresets(next);
+    next[index] = second;
+    next[index + step] = first;
+    if (filter === "ALL") storePresets(next);
+    else storeOrders({ ...orders, [filter]: next.map((preset) => preset.id) });
   }
 
   // Stores a preset on the Pi (null clears it): the app's next Camera checks vote with it.
@@ -468,7 +490,7 @@ export function Console() {
                             );
                           })()}
                           {saved.length > 0 && (() => {
-                            const visible = saved.filter((preset) => presetMatches(preset, filter));
+                            const visible = presetsIn(filter);
                             return (
                               <>
                                 <div className="mb-2 flex flex-wrap gap-1" role="group" aria-label="Filter presets by result">
@@ -488,8 +510,8 @@ export function Console() {
                                     return (
                                       <li key={preset.id} className={`flex flex-wrap items-center gap-2 rounded-lg border p-2 text-sm ${inUse ? "border-primary" : ""}`}>
                                         <span className="flex flex-col">
-                                          <button className="px-1 text-xs leading-none disabled:opacity-30" aria-label={`Move ${preset.name} up`} disabled={busy || index === 0} onClick={() => { const other = visible[index - 1]; if (other) movePreset(preset.id, other.id); }}>▲</button>
-                                          <button className="px-1 text-xs leading-none disabled:opacity-30" aria-label={`Move ${preset.name} down`} disabled={busy || index === visible.length - 1} onClick={() => { const other = visible[index + 1]; if (other) movePreset(preset.id, other.id); }}>▼</button>
+                                          <button className="px-1 text-xs leading-none disabled:opacity-30" aria-label={`Move ${preset.name} up`} disabled={busy || index === 0} onClick={() => movePreset(visible, index, -1)}>▲</button>
+                                          <button className="px-1 text-xs leading-none disabled:opacity-30" aria-label={`Move ${preset.name} down`} disabled={busy || index === visible.length - 1} onClick={() => movePreset(visible, index, 1)}>▼</button>
                                         </span>
                                         <span className="font-semibold">{preset.name}</span>
                                         <span className="text-xs text-muted-foreground">{countsText(preset.counts)} · {pct(preset.confidence)} · {presetLabel(preset.counts, preset.confidence)}{preset.category ? ` · filed under ${OUTCOME_FILTERS.find((item) => item.key === preset.category)?.label}` : ""}</span>
