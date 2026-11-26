@@ -113,11 +113,12 @@ def session_need(target, trough, rate, offset=0.0):
             "partial": partial, "reason": "cap_reached" if partial else None}
 
 
-def session_plan(target, reading, rate, offset=0.0):
+def session_plan(target, reading, rate, offset=0.0, manual=False):
     """Rough-check mode (owner 2026-11-08, while the trough scale drifts):
     dispense the full target (10 s cap) unless a VALID trough reading shows
     more than target + FULL_MARGIN_GRAMS. An unreadable trough still feeds.
-    `reading` is a trough_valid() result (or None).
+    `reading` is a trough_valid() result (or None). manual (Feed now, owner
+    2026-11-26): the person chose to feed, so the trough never skips it.
     Returns {action, grams, seconds, partial, reason, troughReadable}."""
     readable = bool(reading and reading.get("valid"))
     def skip(reason):
@@ -127,7 +128,7 @@ def session_plan(target, reading, rate, offset=0.0):
         return skip("no_target")
     if not _number(rate) or rate <= 0:
         return skip("bad_rate")
-    if readable and _number(reading.get("grams")) and reading["grams"] > target + FULL_MARGIN_GRAMS:
+    if not manual and readable and _number(reading.get("grams")) and reading["grams"] > target + FULL_MARGIN_GRAMS:
         return skip("trough_full")
     grams = float(target)
     seconds = gate_seconds(grams, rate, offset)
@@ -137,7 +138,7 @@ def session_plan(target, reading, rate, offset=0.0):
     if partial:
         seconds = MAX_DISPENSE_SECONDS
         grams = gate_grams(seconds, rate, offset)
-    reasons = [r for r in ("cap_reached" if partial else None, None if readable else "trough_unreadable") if r]
+    reasons = [r for r in ("cap_reached" if partial else None, None if readable or manual else "trough_unreadable") if r]
     return {"action": "dispense", "grams": round(grams, 1), "seconds": round(seconds, 3), "partial": partial,
             "reason": ",".join(reasons) or None, "troughReadable": readable}
 
@@ -194,8 +195,10 @@ def add_record(sessions, record, today):
 
 
 def done_times(sessions, day):
+    """Scheduled times already handled that day. Manual feeds (Feed now) are
+    not schedule slots, so they never cover one."""
     key = day.isoformat()
-    return {s["time"] for s in sessions if s.get("date") == key}
+    return {s["time"] for s in sessions if s.get("date") == key and not s.get("manual")}
 
 
 def _valid_record(item):
@@ -228,6 +231,8 @@ def fault_streak(sessions):
     count nor break the streak; a successful dispense resets it."""
     streak = 0
     for record in reversed(sessions):
+        if record.get("manual"):
+            continue  # Feed now presses never switch automatic feeding off
         result = record.get("result")
         if result == "fault":
             streak += 1

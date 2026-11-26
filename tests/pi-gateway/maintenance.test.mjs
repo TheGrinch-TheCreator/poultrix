@@ -34,7 +34,7 @@ const run = async (name, request, want, extra) => {
 
 ok("maintenance table = bypass/* + camera + snapshot", MAINTENANCE_ROUTES.every((r) => r.maintenance || ["/camera/stream", "/camera/live", "/snapshot"].includes(r.path)) && MAINTENANCE_ROUTES.length === 18, `(${MAINTENANCE_ROUTES.length} routes)`);
 ok("maintenance table has no system power routes", !MAINTENANCE_ROUTES.some((r) => r.path.startsWith("/system/reboot") || r.path.startsWith("/system/power-off")));
-ok("app table has no bypass routes (M3)", !APP_ROUTES.some((r) => r.path.startsWith("/bypass/")) && APP_ROUTES.length === 28, `(${APP_ROUTES.length} routes)`);
+ok("app table has no bypass routes (M3)", !APP_ROUTES.some((r) => r.path.startsWith("/bypass/")) && APP_ROUTES.length === 29, `(${APP_ROUTES.length} routes)`);
 await run("stage-library allows a large preset list", req("/api/pi/bypass/stage-library", { method: "POST", headers: { "x-poultrix-maintenance": "good-token" }, body: JSON.stringify({ presets: "x".repeat(20_000) }) }), 200);
 await run("ai-checks/delete is forwarded", req("/api/pi/bypass/ai-checks/delete", { method: "POST", headers: { "x-poultrix-maintenance": "good-token" }, body: JSON.stringify({ ids: [1] }) }), 200);
 await run("ai-checks/delete is POST only", req("/api/pi/bypass/ai-checks/delete", { headers: { "x-poultrix-maintenance": "good-token" } }), 405);

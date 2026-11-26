@@ -4063,11 +4063,16 @@ def _save_feed_sessions():
         print(f"[FEED AUTO] could not save sessions: {error}", flush=True)
 
 
+def _session_key(record):
+    """A scheduled session is one per (date, time); each manual feed is its own."""
+    return (record.get("date"), record.get("time"), record.get("at") if record.get("manual") else None)
+
+
 def _put_session(record):
     """Insert or replace the record for (date, time), then persist."""
     global feed_sessions
     with feed_sessions_lock:
-        kept = [r for r in feed_sessions if not (r.get("date") == record["date"] and r.get("time") == record["time"])]
+        kept = [r for r in feed_sessions if _session_key(r) != _session_key(record)]
         feed_sessions = feeding_schedule.add_record(kept, record, _manila_now().date())
         _save_feed_sessions()
 
@@ -4091,7 +4096,8 @@ def automatic_feeding_status():
             "next": due["next"], "today": [r for r in sessions if r.get("date") == today.isoformat()],
             "last": sessions[-1] if sessions else None,
             "faultStreak": feeding_schedule.fault_streak(sessions),
-            "mode": "rough_check", "fullMarginGrams": feeding_schedule.FULL_MARGIN_GRAMS}
+            "mode": "rough_check", "fullMarginGrams": feeding_schedule.FULL_MARGIN_GRAMS,
+            "manualRunning": manual_feed_running.is_set()}
 
 
 def _set_automatic(enabled, reason=None):
@@ -4126,8 +4132,9 @@ def _wait_feed_job(timeout):
     return "fault", "Feeding job did not finish in time"
 
 
-def run_feeding_session(slot, now):
-    """One scheduled session. Returns the final record."""
+def run_feeding_session(slot, now, manual=False):
+    """One scheduled session, or a manual Feed now (manual=True: recorded as
+    manual, never skipped for a full trough). Returns the final record."""
     with feed_config_lock:
         config = _read_feed_config()
     with state_lock:
@@ -4138,9 +4145,11 @@ def run_feeding_session(slot, now):
     base = dict(now=now, slot=slot, stage=stage or None, target=target)
 
     def record(result, reason, trough=None, dispensed=0, **extra):
+        if manual:
+            extra["manual"] = True
         rec = feeding_schedule.make_record(base["now"], slot, base["stage"], target, trough, dispensed, result, reason, **extra)
         _put_session(rec)
-        print(f"[FEED AUTO] {slot} {result}: {reason} (target {target}, trough {trough}, dispensed {dispensed})", flush=True)
+        print(f"[FEED {'MANUAL' if manual else 'AUTO'}] {slot} {result}: {reason} (target {target}, trough {trough}, dispensed {dispensed})", flush=True)
         return rec
 
     if stage not in ("STARTER", "GROWER", "FINISHER") or not target:
@@ -4155,12 +4164,13 @@ def run_feeding_session(slot, now):
         return record("skipped", "no_stage_compatible_compartment")
     reading = trough_feeding_reading()
     trough_before = reading.get("grams") if reading.get("valid") else None
-    decision = feeding_schedule.session_plan(target, reading, FEED_RATES[compartment], FEED_OFFSETS[compartment])
+    decision = feeding_schedule.session_plan(target, reading, FEED_RATES[compartment], FEED_OFFSETS[compartment],
+                                             manual=manual)
     if decision["action"] == "skip":
         return record("skipped", decision["reason"], trough_before)
     # Persist first: an interrupted session is never repeated.
     record("fault", "interrupted", trough_before, compartment=compartment)
-    result, status = _start_feed_job(compartment, float(decision["grams"]), "automatic")
+    result, status = _start_feed_job(compartment, float(decision["grams"]), "manual_session" if manual else "automatic")
     if status != 202:
         return record("fault", str(result.get("error") or f"start refused ({status})"), trough_before, compartment=compartment)
     job_status, job_error = _wait_feed_job(decision["seconds"] + 30)
@@ -4239,6 +4249,52 @@ def feeding_automatic_api():
     return jsonify(automatic_feeding_status())
 
 
+manual_feed_running = threading.Event()
+
+
+def _manual_feed_worker(slot, now):
+    try:
+        run_feeding_session(slot, now, manual=True)
+    except Exception as exc:
+        print("[FEED MANUAL] error:", exc, flush=True)
+    finally:
+        manual_feed_running.clear()
+
+
+@app.route("/api/feeding/feed-now", methods=["POST"])
+def feeding_feed_now_api():
+    """Feed now (owner, 2026-11-26): while automatic feeding is off, dispense one
+    session amount for the confirmed stage from the stage's compartment, like a
+    scheduled session but never skipped for a full trough. It runs in the
+    background and shows in today's sessions as a manual feed."""
+    with feed_config_lock:
+        config = _read_feed_config()
+    if config.get("automaticEnabled") and FEED_AUTOMATION_COMMISSIONED:
+        return jsonify(error="Automatic feeding is on. Turn it off to feed now", code="AUTOMATIC_ON"), 409
+    with state_lock:
+        stage = str(state.get("stage") or "").upper()
+        ready = controller_ready_locked()
+    target = _feed_plan(config, stage).get("targetGrams")
+    if stage not in ("STARTER", "GROWER", "FINISHER") or not target:
+        return jsonify(error="No confirmed stage or bird count, so there is no session amount"), 409
+    if not ready:
+        return jsonify(error="The controller is not ready; try again in a few minutes"), 423
+    with inventory_lock:
+        compartment = _inventory_snapshot(_inventory_read()).get("selectedCompartment")
+    if compartment not in FEED_RATES:
+        return jsonify(error="No compartment has feed for this stage"), 409
+    with manual_feed_lock:
+        if manual_feed_running.is_set() or _feeding_busy():
+            return jsonify(error="Feeding is already running"), 409
+        manual_feed_running.set()
+    now = _manila_now()
+    slot = now.strftime("%H:%M")
+    print(f"[AUDIT] feed now ({target} g, compartment {compartment}) by {request_user()}", flush=True)
+    threading.Thread(target=_manual_feed_worker, args=(slot, now), daemon=True).start()
+    return jsonify(success=True, status="starting", targetGrams=target, compartment=compartment, time=slot), 202
+
+
+manual_feed_lock = threading.Lock()
 threading.Thread(target=feed_schedule_worker, daemon=True).start()
 
 # ============================================================

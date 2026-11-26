@@ -14,6 +14,8 @@ export type FeedingSessionRecord = {
   troughAfter?: number | null;
   check?: string | null;
   troughReadable?: boolean;
+  /** Feed now on the Feeding page, not a scheduled session. */
+  manual?: boolean;
 };
 
 /** Plain-language text for session and switch reasons. */

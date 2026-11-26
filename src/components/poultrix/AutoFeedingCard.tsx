@@ -1,6 +1,6 @@
 // Automatic feeding (SPEC-auto-feeding A4): owner switch, next session and
 // today's sessions with reasons. Data from /api/pi/feeding/sessions (30 s).
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Card, CardTitle, Pill } from "@/components/poultrix/ui";
 import { piErrorMessage, piJson } from "@/lib/pi-client";
 import { usePiResource } from "@/lib/live-endpoints";
@@ -18,6 +18,7 @@ type AutomaticStatus = {
   today: FeedingSessionRecord[];
   faultStreak: number;
   fullMarginGrams: number;
+  manualRunning?: boolean;
 };
 
 const RESULT_LABEL: Record<FeedingSessionRecord["result"], string> = {
@@ -35,6 +36,36 @@ export function AutoFeedingCard() {
   const { data, error, reload } = usePiResource<AutomaticStatus>("/feeding/sessions", 30_000);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+
+  // Feed now (owner, 2026-11-26): one session amount while automatic feeding is off.
+  async function feedNow() {
+    if (!data?.targetGrams) return;
+    if (
+      !window.confirm(`Feed now?
+
+The Pi dispenses one session amount (${grams(data.targetGrams)}) for the confirmed stage, even if the trough still has feed.`)
+    )
+      return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      await piJson("/feeding/feed-now", { body: {} });
+      setMessage("Feeding now… The result shows under Today when it finishes.");
+      reload();
+    } catch (cause) {
+      setMessage(piErrorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // While a manual feed runs, check every 3 s until it is recorded.
+  const manualRunning = !!data?.manualRunning;
+  useEffect(() => {
+    if (!manualRunning) return;
+    const timer = setInterval(reload, 3000);
+    return () => clearInterval(timer);
+  }, [manualRunning, reload]);
 
   async function setEnabled(enabled: boolean) {
     const prompt = enabled
@@ -118,6 +149,15 @@ export function AutoFeedingCard() {
                 Turn on
               </button>
             )}
+            {!data.active && (
+              <button
+                className="rounded-lg border border-primary px-4 py-2 text-sm font-semibold text-primary disabled:opacity-40 hover:bg-muted"
+                disabled={busy || manualRunning || !data.targetGrams}
+                onClick={() => void feedNow()}
+              >
+                {manualRunning ? "Feeding…" : `Feed now (${grams(data.targetGrams)})`}
+              </button>
+            )}
           </div>
           {message && <p className="mt-2 text-sm">{message}</p>}
           <h3 className="mt-5 text-sm font-semibold">Today</h3>
@@ -127,7 +167,7 @@ export function AutoFeedingCard() {
             <ul className="mt-2 divide-y text-sm">
               {data.today.map((session) => (
                 <li
-                  key={`${session.date}-${session.time}`}
+                  key={`${session.date}-${session.time}-${session.manual ? session.at : ""}`}
                   className="flex flex-wrap items-baseline justify-between gap-2 py-2"
                 >
                   <span className="font-medium tabular-nums">{session.time}</span>
@@ -140,6 +180,7 @@ export function AutoFeedingCard() {
                           : ""
                     }
                   >
+                    {session.manual ? "Manual: " : ""}
                     {RESULT_LABEL[session.result]}
                     {session.dispensedGrams ? ` ${grams(session.dispensedGrams)}` : ""}
                   </span>

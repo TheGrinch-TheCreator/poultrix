@@ -56,6 +56,7 @@ const ROUTES: readonly PiRoute[] = [
   { path: "/feeding/config", upstream: "/api/feeding/config", methods: BOTH },
   { path: "/feeding/sessions", upstream: "/api/feeding/sessions", methods: GET },
   { path: "/feeding/automatic", upstream: "/api/feeding/automatic", methods: POST, owner: true },
+  { path: "/feeding/feed-now", upstream: "/api/feeding/feed-now", methods: POST },
   { path: "/feeding/batch/start", upstream: "/api/feeding/batch/start", methods: POST, owner: true },
   { path: "/feeding/manual/preview", upstream: "/api/feeding/manual/preview", methods: POST },
   { path: "/feeding/manual/start", upstream: "/api/feeding/manual/start", methods: POST },

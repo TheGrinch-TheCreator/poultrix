@@ -241,5 +241,30 @@ class Sessions(unittest.TestCase):
         self.assertFalse(fs.should_disable([r("fault")] * 2))
 
 
+
+class FeedNow(unittest.TestCase):
+    """Manual Feed now (owner 2026-11-26): never skipped for a full trough,
+    never covers a schedule slot, never counts toward the 3-fault switch-off."""
+    RATE = 103.0
+
+    def test_manual_feeds_even_when_trough_full(self):
+        full = {"valid": True, "grams": 400, "reason": None}
+        self.assertEqual(fs.session_plan(157.5, full, self.RATE)["action"], "skip")
+        r = fs.session_plan(157.5, full, self.RATE, manual=True)
+        self.assertEqual((r["action"], r["grams"], r["reason"]), ("dispense", 157.5, None))
+        r = fs.session_plan(157.5, None, self.RATE, manual=True)
+        self.assertEqual((r["action"], r["reason"]), ("dispense", None))  # no "trough unreadable" note
+        self.assertEqual(fs.session_plan(1500, None, self.RATE, manual=True)["reason"], "cap_reached")
+
+    def test_manual_never_covers_a_slot(self):
+        manual = fs.make_record(at(10), "10:00", "GROWER", 157.5, None, 157.5, "dispensed", None, manual=True)
+        auto = fs.make_record(at(14), "14:00", "GROWER", 157.5, None, 157.5, "dispensed", None)
+        self.assertEqual(fs.done_times([manual, auto], DAY), {"14:00"})
+
+    def test_manual_faults_never_switch_automatic_off(self):
+        self.assertEqual(fs.fault_streak([{"result": "fault"}, {"result": "fault", "manual": True},
+                                          {"result": "dispensed", "manual": True}, {"result": "fault"}]), 2)
+        self.assertFalse(fs.should_disable([{"result": "fault", "manual": True}] * 3))
+
 if __name__ == "__main__":
     unittest.main()

@@ -117,12 +117,12 @@ function deriveAlerts(s: Snapshot | null): LiveAlert[] {
     add(out, "auto-feeding-disabled", "critical", "Automatic feeding turned off", "Three feeding sessions in a row failed, so automatic feeding switched itself off.", "Check the gates, hopper and Arduino, then turn automatic feeding back on in the Feeding page.");
   const last = auto?.last;
   if (last && last.date === new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Manila" })) {
-    const id = `auto-feed-${last.date}-${last.time}`;
-    if (last.result === "fault") add(out, `${id}-fault`, "warning", `Feeding ${last.time} failed`, `The ${last.time} session did not complete: ${reasonText(last.reason)}.`, "Check the gate and hopper; the next session runs as scheduled.");
+    const id = last.manual ? `manual-feed-${last.at}` : `auto-feed-${last.date}-${last.time}`;
+    if (last.result === "fault") add(out, `${id}-fault`, "warning", last.manual ? `Feed now at ${last.time} failed` : `Feeding ${last.time} failed`, `The ${last.manual ? "manual feed" : `${last.time} session`} did not complete: ${reasonText(last.reason)}.`, last.manual ? "Check the gate and hopper, then try again." : "Check the gate and hopper; the next session runs as scheduled.");
     if (last.check === "low_rise") add(out, `${id}-low-rise`, "warning", `Feed may not have reached the trough (${last.time})`, `The trough barely rose after dispensing ${Math.round(last.dispensedGrams ?? 0)} g.`, "Check that the hopper compartment has feed and the gate isn't jammed.");
     if (last.result === "partial") add(out, `${id}-partial`, "info", `Feeding ${last.time} was partial`, "The session needed more than the 10 s gate limit allows.", "Check the bird count, or add a manual feed.");
     if (last.result === "dispensed" && last.reason?.includes("trough_unreadable")) add(out, `${id}-unreadable`, "info", `Trough scale unreadable at ${last.time}`, "The full session amount was dispensed because the trough reading was not stable.", "Zero the trough again on the maintenance site if this keeps happening.");
-    if (last.result === "skipped" && last.reason && last.reason !== "trough_full") add(out, `${id}-skipped`, "info", `Feeding ${last.time} skipped`, `Skipped: ${reasonText(last.reason)}.`, "The next session runs as scheduled.");
+    if (last.result === "skipped" && !last.manual && last.reason && last.reason !== "trough_full") add(out, `${id}-skipped`, "info", `Feeding ${last.time} skipped`, `Skipped: ${reasonText(last.reason)}.`, "The next session runs as scheduled.");
   }
   if (s.weight && /^(ERROR|FAULT|DISCONNECTED)$/i.test(String(s.weight.status || ""))) add(out,"weight-fault","warning","Feed weight sensor issue",`HX711 reported ${s.weight.status}.`,"Check load cell wiring, calibration, and the HX711 module.");
   if (s.feeding?.gates && typeof s.feeding.gates === "object") Object.entries(s.feeding.gates).forEach(([gate, value]) => {
