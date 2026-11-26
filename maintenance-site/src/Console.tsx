@@ -24,7 +24,10 @@ type BypassStatus = {
   simulation?: { active?: boolean; stage?: string; framesAnalyzed?: number; confidence?: number | null };
   schedule?: StageSchedule;
   manualStageHistory?: { at: string; from: string | null; to: string | null; stage?: string; votes?: number; counts?: Record<string, number>; confidence?: number | null; confirmations?: number; required?: number; result?: string; error?: string | null }[];
-  stagePreset?: { stage: string; votes: number; counts?: Record<string, number>; confidence: number | null; setAt: string; by: string } | null;
+  stagePreset?: {
+    stage: string | null; votes: number; counts?: Record<string, number>; confidence: number | null; setAt: string; by: string;
+    name?: string | null; position?: number; queue?: { name: string | null; counts: Record<string, number>; confidence: number | null }[];
+  } | null;
   stageSession?: { id: number; status: string; stage: string | null; votes: number | null; submitted: number; confirmations?: number; required?: number; result: string | null; error: string | null; startedAt: string | null; finishedAt: string | null };
   trough?: {
     raw: number | null; zeroRaw: number | null; countsPerGram: number | null; zeroAt: string | null; checkedAt: string | null;
@@ -57,6 +60,9 @@ const PRESETS_KEY = "poultrix-maintenance-stage-presets";
 // Each filter keeps its own order (owner, 2026-11-26). "All" is the saved list's own order;
 // the others are preset ids in this key. A preset missing from a filter's order goes last.
 const ORDERS_KEY = "poultrix-maintenance-stage-preset-orders";
+// Must match raspberry-pi/ai_votes.py (PRESET_QUEUE_MAX / PRESET_NAME_MAX).
+const PRESET_QUEUE_MAX = 30;
+const PRESET_NAME_MAX = 40;
 type FilterOrders = Partial<Record<Outcome, string[]>>;
 const wholeOrBlank = (value: string) => value.trim() === "" || /^\d+$/.test(value.trim());
 const countsOf = (text: Record<StageKey, string>): VoteCounts =>
@@ -76,6 +82,7 @@ const OUTCOME_FILTERS: { key: Outcome | "ALL"; label: string }[] = [
   { key: "ALL", label: "All" }, { key: "STARTER", label: "Starter" }, { key: "GROWER", label: "Grower" },
   { key: "FINISHER", label: "Finisher" }, { key: "TIE", label: "Tie" }, { key: "NONE", label: "No result" },
 ];
+const filterLabel = (key: Outcome | "ALL") => OUTCOME_FILTERS.find((item) => item.key === key)?.label ?? key;
 function outcomeOf(counts: VoteCounts, confidence: number | null): Outcome {
   const check = judgeCounts(counts);
   if (check.tie) return "TIE";
@@ -201,8 +208,10 @@ export function Console() {
     } finally { setBusy(false); }
   }
 
+  // The preset the next Camera check uses (the Pi's current position in the Use list).
   const inUseNow = (preset: SavedPreset) =>
-    !!status?.stagePreset && sameCounts(status.stagePreset.counts, preset.counts) && (status.stagePreset.confidence ?? null) === preset.confidence;
+    !!status?.stagePreset && sameCounts(status.stagePreset.counts, preset.counts) && (status.stagePreset.confidence ?? null) === preset.confidence
+    && (status.stagePreset.name == null || status.stagePreset.name === preset.name.slice(0, PRESET_NAME_MAX));
   // The presets shown under a filter, in that filter's own order.
   function presetsIn(view: Outcome | "ALL"): SavedPreset[] {
     const shown = saved.filter((preset) => presetMatches(preset, view));
@@ -232,6 +241,23 @@ export function Console() {
       setMessage(preset
         ? `Preset ${preset.name ? `"${preset.name}" ` : ""}set: ${countsText(preset.counts)}, ${pct(preset.confidence)}. Press Camera check in the app; the votes arrive in a random order and it ends in: ${outcomeText(outcomeOf(preset.counts, preset.confidence))}.`
         : "Preset cleared. Camera checks in the app use the camera again.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+      if (sessionExpired(error)) clearSession();
+    } finally { setBusy(false); }
+  }
+
+  // Use: sends this filter's list from the pressed preset on (then the ones before it). Each
+  // Camera check in the app uses the next one; after the last it starts over (the Pi keeps the list).
+  async function applyPresetList(shown: SavedPreset[], index: number) {
+    const ordered = [...shown.slice(index), ...shown.slice(0, index)].slice(0, PRESET_QUEUE_MAX);
+    const first = ordered[0];
+    if (!first) return;
+    setBusy(true);
+    try {
+      await call("stage-preset", { queue: ordered.map((preset) => ({ name: preset.name.slice(0, PRESET_NAME_MAX), votes: preset.counts, confidence: preset.confidence })) });
+      setMessage(`Preset "${first.name}" set${ordered.length > 1 ? `, then ${ordered.length - 1} more in this order (${filterLabel(filter)}); each Camera check in the app uses the next and starts over after the last` : ""}.`
+        + (shown.length > PRESET_QUEUE_MAX ? ` Only the first ${PRESET_QUEUE_MAX} are used.` : ""));
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
       if (sessionExpired(error)) clearSession();
@@ -518,7 +544,7 @@ export function Console() {
                                         {inUse && <Pill tone="ok">in use</Pill>}
                                         {editingId === preset.id && <Pill tone="info">editing</Pill>}
                                         <span className="ml-auto flex gap-2">
-                                          <button className={btn} disabled={busy || !active || running} onClick={() => void savePreset(preset)}>Use</button>
+                                          <button className={btn} disabled={busy || !active || running} onClick={() => void applyPresetList(visible, index)}>Use</button>
                                           <button className={btn} disabled={busy} onClick={() => {
                                             setCountText({ STARTER: String(preset.counts.STARTER), GROWER: String(preset.counts.GROWER), FINISHER: String(preset.counts.FINISHER) });
                                             setConfidenceText(preset.confidence == null ? "" : String(preset.confidence));
@@ -541,7 +567,14 @@ export function Console() {
                           })()}
                           <p className="mb-3 text-sm">
                             {status?.stagePreset
-                              ? <>Stored preset: <span className="font-semibold">{title(status.stagePreset.stage)} most · {status.stagePreset.counts ? countsText(status.stagePreset.counts) : `${status.stagePreset.votes} votes`} · {pct(status.stagePreset.confidence)}</span> (used by the next Camera check in the app)</>
+                              ? (() => {
+                                  const stored = status.stagePreset;
+                                  const queue = stored.queue ?? [];
+                                  const position = stored.position ?? 0;
+                                  const next = queue.length > 1 ? queue[(position + 1) % queue.length] : null;
+                                  return <>Next Camera check: <span className="font-semibold">{stored.name ? `"${stored.name}" · ` : ""}{stored.counts ? countsText(stored.counts) : `${stored.votes} votes`} · {pct(stored.confidence)}</span>
+                                    {queue.length > 1 ? ` (${position + 1} of ${queue.length}; then ${next?.name ? `"${next.name}"` : "the next"}, starting over after the last)` : " (used by every Camera check in the app)"}</>;
+                                })()
                               : "No preset stored: Camera checks in the app use the camera."}
                           </p>
                           {session && session.status !== "idle" && (

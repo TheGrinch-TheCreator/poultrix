@@ -128,6 +128,33 @@ def parse_vote_counts(value):
     return (winners[0].upper() if len(winners) == 1 else None), counts, total
 
 
+PRESET_QUEUE_MAX = 30  # presets in one Use list (the gateway limits a body to 4 KB)
+PRESET_NAME_MAX = 40
+
+
+def parse_preset_queue(value):
+    """The ordered presets a Use press sends (owner, 2026-11-26): each Camera
+    check uses one, then the next; after the last it starts over.
+    value: [{"name"?, "votes": {STAGE: n}, "confidence"?}, ...], 1 to
+    PRESET_QUEUE_MAX entries. Returns [{"name", "stage", "counts", "votes",
+    "confidence"}]; raises ValueError naming the bad entry."""
+    if not isinstance(value, list) or not 1 <= len(value) <= PRESET_QUEUE_MAX:
+        raise ValueError(f"A preset list must have 1 to {PRESET_QUEUE_MAX} presets")
+    queue = []
+    for number, entry in enumerate(value, 1):
+        if not isinstance(entry, dict):
+            raise ValueError(f"Preset {number} is not valid")
+        try:
+            stage, counts, total = parse_vote_counts(entry.get("votes"))
+            confidence = parse_confidence(entry.get("confidence"))
+        except ValueError as exc:
+            raise ValueError(f"Preset {number}: {exc}") from None
+        name = entry.get("name")
+        name = str(name).strip()[:PRESET_NAME_MAX] if isinstance(name, str) and name.strip() else None
+        queue.append({"name": name, "stage": stage, "counts": counts, "votes": total, "confidence": confidence})
+    return queue
+
+
 def vote_sequence(counts, rng=random):
     """The stage of each simulated vote, in a random order (shuffled, so the
     stages are mixed like camera frames instead of one block per stage)."""

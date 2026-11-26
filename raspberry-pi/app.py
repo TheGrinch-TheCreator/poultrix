@@ -2678,7 +2678,28 @@ def run_simulated_vote_session(target, vote_count, token, user, confidence=None,
 # It belongs to the maintenance login that set it, so it ends on Exit, on
 # Return to automatic (cleared there) and when the session expires.
 stage_preset_lock = threading.Lock()
-stage_preset = None  # {"stage", "votes" (total), "counts", "confidence", "setAt", "by", "token"}
+# Use sends an ordered list (owner, 2026-11-26): each finished Camera check
+# moves to the next preset, and after the last it starts over.
+stage_preset = None  # {"stage", "votes" (total), "counts", "confidence", "name", "queue", "position",
+                     #  "listId", "setAt", "by", "token"}
+
+
+def _preset_at(queue, position):
+    """The stored-preset fields for queue[position]."""
+    entry = queue[position]
+    return {"stage": entry["stage"], "votes": entry["votes"], "counts": dict(entry["counts"]),
+            "confidence": entry["confidence"], "name": entry.get("name"), "position": position}
+
+
+def advance_stage_preset(list_id):
+    """After a finished preset Camera check: the next preset in the list
+    (the first again after the last). Only if that list is still stored."""
+    with stage_preset_lock:
+        preset = stage_preset
+        if not preset or preset.get("listId") != list_id or not preset.get("queue"):
+            return
+        queue = preset["queue"]
+        preset.update(_preset_at(queue, (preset.get("position", 0) + 1) % len(queue)))
 
 
 def active_stage_preset():
@@ -2719,6 +2740,7 @@ def run_preset_camera_check(preset, user):
     outcome = session["outcome"]
     if outcome is None:
         return {"success": False, "error": "AI analysis cycle was interrupted"}
+    advance_stage_preset(preset.get("listId"))
     hardware = outcome.get("hardware")
     return {"success": True, "stage": outcome["stage"], "detectedStage": outcome["stage"],
             "confidence": outcome["confidence"], "confident": outcome["confident"], "status": outcome["status"],
@@ -2734,8 +2756,9 @@ def bypass_stage_preset():
     """Store a preset for the main app's next Camera checks, or {clear: true}
     to go back to real camera checks. Body: {votes: {STARTER: n, GROWER: n,
     FINISHER: n}, confidence?} (the stage with the most votes is the one the
-    vote confirms), or the older {stage, votes: n, confidence?} (all n votes
-    for that stage)."""
+    vote confirms), {queue: [{name?, votes, confidence?}, ...]} (one preset
+    per Camera check, in order, starting over after the last), or the older
+    {stage, votes: n, confidence?} (all n votes for that stage)."""
     global stage_preset
     if not bypass_authorized():
         return jsonify(error="Unauthorized"), 403
@@ -2747,23 +2770,28 @@ def bypass_stage_preset():
     if not bypass_active():
         return jsonify(error="Manual controls paused. Click Resume Bypass first."), 409
     try:
-        if isinstance(body.get("votes"), dict):
+        if "queue" in body:
+            queue = ai_votes.parse_preset_queue(body["queue"])
+        elif isinstance(body.get("votes"), dict):
             target, counts, vote_count = ai_votes.parse_vote_counts(body["votes"])
+            queue = [{"name": None, "stage": target, "counts": counts, "votes": vote_count,
+                      "confidence": ai_votes.parse_confidence(body.get("confidence"))}]
         else:
             target = str(body.get("stage") or "").strip().upper()
             if target not in stage_schedule.STAGES:
                 return jsonify(error="Stage must be STARTER, GROWER or FINISHER"), 400
             vote_count = ai_votes.parse_vote_count(body.get("votes"))
-            counts = dict(ai_votes.empty_votes(), **{target.title(): vote_count})
-        confidence = ai_votes.parse_confidence(body.get("confidence"))
+            queue = [{"name": None, "stage": target, "counts": dict(ai_votes.empty_votes(), **{target.title(): vote_count}),
+                      "votes": vote_count, "confidence": ai_votes.parse_confidence(body.get("confidence"))}]
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
     with bypass_lock:
         token = bypass_token
     with stage_preset_lock:
-        stage_preset = {"stage": target, "votes": vote_count, "counts": counts, "confidence": confidence,
-                        "setAt": utc_timestamp(), "by": request_user(), "token": token}
-    print(f"[AUDIT] stage preset {target} {counts} confidence {confidence} by {request_user()}", flush=True)
+        stage_preset = dict(_preset_at(queue, 0), queue=queue, listId=secrets.token_hex(8),
+                            setAt=utc_timestamp(), by=request_user(), token=token)
+    print(f"[AUDIT] stage preset list of {len(queue)} by {request_user()}: "
+          + "; ".join(f"{entry['name'] or '-'} {entry['counts']} {entry['confidence']}" for entry in queue), flush=True)
     return jsonify(success=True, stagePreset=stage_preset_snapshot())
 
 

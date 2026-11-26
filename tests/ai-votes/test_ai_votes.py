@@ -78,7 +78,7 @@ class VoteCount(unittest.TestCase):
 FUNCTIONS = {"stage_session_snapshot", "stage_session_token_valid", "record_stage_session",
              "run_simulated_vote_session", "apply_confirmed_stage_to_arduino", "reset_transition_candidate",
              "_manual_history", "active_stage_preset", "stage_preset_snapshot", "clear_stage_preset",
-             "run_preset_camera_check", "evaluate_preset_transition"}
+             "run_preset_camera_check", "evaluate_preset_transition", "advance_stage_preset", "_preset_at"}
 NAMES = {"AI_RESULT_FIELDS", "STAGE_HANDOFF_ERRORS"}
 CLASSES = {"VoteSessionCancelled"}
 WINDOW = 0.4  # seconds, instead of 30
@@ -535,6 +535,68 @@ class MixedPreset(unittest.TestCase):
             self.assertEqual((result["votes"], result["detectedStage"], result["framesAnalyzed"]), (counts, "Finisher", 24))
         finally:
             pi.close()
+
+
+class PresetList(unittest.TestCase):
+    """Use sends an ordered list: each Camera check uses the next preset, and
+    after the last it starts over (owner, 2026-11-26)."""
+
+    LIST = [{"name": "A", "votes": {"STARTER": 25, "GROWER": 3}, "confidence": 90},
+            {"name": "B", "votes": {"GROWER": 12, "FINISHER": 12}},
+            {"name": "C", "votes": {"STARTER": 2, "GROWER": 17, "FINISHER": 9}, "confidence": 85.5}]
+
+    def setUp(self):
+        self.pi = FakePi(stage="GROWER")
+
+    def tearDown(self):
+        self.pi.close()
+
+    def store(self, raw):
+        queue = av.parse_preset_queue(raw)
+        self.pi.ns["stage_preset"] = dict(self.pi.ns["_preset_at"](queue, 0), queue=queue, listId="L1",
+                                          setAt="t", by="ip:test", token="tok")
+
+    def check(self):
+        return self.pi.ns["run_preset_camera_check"](self.pi.ns["active_stage_preset"](), "owner@example")
+
+    def test_parse(self):
+        queue = av.parse_preset_queue(self.LIST)
+        self.assertEqual([(e["name"], e["stage"], e["votes"], e["confidence"]) for e in queue],
+                         [("A", "STARTER", 28, 90.0), ("B", None, 24, None), ("C", "GROWER", 28, 85.5)])
+        self.assertIsNone(av.parse_preset_queue([{"name": "  ", "votes": {"GROWER": 5}}])[0]["name"])
+        self.assertEqual(len(av.parse_preset_queue([{"name": "x" * 99, "votes": {"GROWER": 5}}])[0]["name"]), av.PRESET_NAME_MAX)
+        for bad in ([], [{"votes": {"GROWER": 5}}] * (av.PRESET_QUEUE_MAX + 1), "x", [5], [{"votes": {}}],
+                    [{"votes": {"GROWER": 5}, "confidence": 0}]):
+            with self.assertRaises(ValueError, msg=repr(bad)[:60]):
+                av.parse_preset_queue(bad)
+
+    def test_each_check_uses_the_next_and_loops(self):
+        self.store(self.LIST)
+        seen = []
+        for _ in range(4):
+            seen.append((self.pi.ns["stage_preset"]["name"], self.check()["votes"]))
+        self.assertEqual([name for name, _ in seen], ["A", "B", "C", "A"])
+        self.assertEqual(seen[2][1], {"Starter": 2, "Grower": 17, "Finisher": 9})
+        self.assertEqual(self.pi.ns["stage_preset"]["position"], 1)
+
+    def test_a_check_that_did_not_finish_does_not_move_on(self):
+        self.store(self.LIST)
+        self.pi.ns["ai_cycle_lock"].acquire()
+        self.assertTrue(self.check()["busy"])
+        self.pi.ns["ai_cycle_lock"].release()
+        self.assertEqual(self.pi.ns["stage_preset"]["name"], "A")
+
+    def test_a_new_list_is_not_moved_by_an_old_check(self):
+        self.store(self.LIST)
+        self.pi.ns["stage_preset"]["listId"] = "L2"  # Use pressed again
+        self.pi.ns["advance_stage_preset"]("L1")
+        self.assertEqual(self.pi.ns["stage_preset"]["name"], "A")
+
+    def test_a_single_preset_repeats(self):
+        self.store(self.LIST[:1])
+        for _ in range(2):
+            self.check()
+            self.assertEqual(self.pi.ns["stage_preset"]["name"], "A")
 
 
 def function_body(src, name):
