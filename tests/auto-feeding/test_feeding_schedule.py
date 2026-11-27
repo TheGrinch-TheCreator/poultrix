@@ -172,6 +172,56 @@ class GateModel(unittest.TestCase):
         self.assertAlmostEqual(r["grams"], round(self.OFFSET + self.RATE * fs.MAX_DISPENSE_SECONDS, 1))
 
 
+class GateModelCompartment1(unittest.TestCase):
+    """Compartment 1, measured 2026-11-27 (chick booster, holes caught one at a
+    time): grams = -12.1 + 174.5 * seconds. The offset is negative: feed only
+    starts flowing once the servos have opened."""
+    RATE, OFFSET = 174.5, -12.1
+    MEASURED = ((0.3, 40), (0.4, 50), (0.7, 110), (1.0, 180), (1.5, 240))
+
+    def test_fits_the_measurements(self):
+        for seconds, grams in self.MEASURED:
+            self.assertAlmostEqual(fs.gate_grams(seconds, self.RATE, self.OFFSET), grams, delta=18)
+
+    def test_session_gate_times(self):
+        # 2 birds: Grower 45 g, Finisher 67.5 g per session.
+        self.assertAlmostEqual(fs.gate_seconds(45, self.RATE, self.OFFSET), 0.327, places=3)
+        self.assertAlmostEqual(fs.gate_seconds(67.5, self.RATE, self.OFFSET), 0.456, places=3)
+        r = fs.session_plan(45, None, self.RATE, self.OFFSET)
+        self.assertEqual((r["action"], r["grams"]), ("dispense", 45.0))
+        self.assertAlmostEqual(r["seconds"], 0.327, places=3)
+
+    def test_minimum_gate_is_positive(self):
+        # 0.1 s is about 5 g, so the "smallest amount" message stays positive.
+        self.assertGreater(fs.gate_grams(fs.MIN_GATE_SECONDS, self.RATE, self.OFFSET), 0)
+        r = fs.session_plan(4, None, self.RATE, self.OFFSET)
+        self.assertEqual((r["action"], r["reason"]), ("skip", "below_minimum_gate"))
+
+
+class GateModelCompartment2Sequential(unittest.TestCase):
+    """Compartment 2, re-measured 2026-11-27 with the holes opened one after
+    another (Integra 2): grams = -10.1 + 177.0 * seconds."""
+    RATE, OFFSET = 177.0, -10.1
+    MEASURED = ((0.3, 40), (0.4, 70), (0.7, 110), (1.0, 160), (1.5, 260))
+
+    def test_fits_the_measurements(self):
+        for seconds, grams in self.MEASURED:
+            self.assertAlmostEqual(fs.gate_grams(seconds, self.RATE, self.OFFSET), grams, delta=10)
+
+    def test_grower_session_is_possible(self):
+        # 45 g (2 birds, Grower) was below the old model's ~65 g minimum.
+        r = fs.session_plan(45, None, self.RATE, self.OFFSET)
+        self.assertEqual(r["action"], "dispense")
+        self.assertAlmostEqual(r["seconds"], 0.311, places=3)
+
+
+class SequentialHoles(unittest.TestCase):
+    def test_sequence_time(self):
+        # Five openings of 0.327 s plus four 1 s gaps.
+        self.assertAlmostEqual(fs.sequence_seconds(0.327), 5 * 0.327 + 4 * 1.0, places=6)
+        self.assertAlmostEqual(fs.sequence_seconds(10.0), 54.0, places=6)
+
+
 class DueSession(unittest.TestCase):
     def test_window(self):
         self.assertEqual(fs.due_session(at(13, 59), GROWER_TIMES, set())["due"], None)

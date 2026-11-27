@@ -438,7 +438,7 @@ export function Console() {
 
             <Card>
               <CardTitle>Servo control — 2 compartments (10 servos)</CardTitle>
-              <p className="my-2 text-xs text-muted-foreground">Supervised timed group dispensing. Closed 0° · open 90°. The Arduino closes the group after the requested time (max 10 s). One group at a time. Keep compartments empty for tests.</p>
+              <p className="my-2 text-xs text-muted-foreground">Supervised timed group dispensing. Closed 0° · open 90°. Like a feed, the group opens holes 1–5 one after another, each for the requested time (max 10 s), waiting 1 s after each hole closes. One group at a time. Keep compartments empty for tests.</p>
               <label className="block max-w-xs text-sm">Duration (seconds)
                 <input type="number" min="0.1" max="10" step="0.1" className={inputClass + " mt-1"} value={seconds} onChange={(event) => setSeconds(event.target.value)} />
               </label>

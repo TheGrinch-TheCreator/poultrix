@@ -156,8 +156,8 @@ feeding_lock = threading.Lock()
 feeding_gates = {str(i): {"status": "UNKNOWN", "durationMs": 0, "estimatedGrams": None, "updatedAt": None} for i in range(1, 3)}
 feeding_events = deque(maxlen=100)
 # Gate model (see FEED_RATES): grams = offset + rate * seconds.
-feeding_rates = {1: 101.39, 2: 124.1}  # g/s
-feeding_offsets = {1: 0.0, 2: 52.2}    # g per opening (servo travel)
+feeding_rates = {1: 174.5, 2: 177.0}  # g/s
+feeding_offsets = {1: -12.1, 2: -10.1}  # g per opening (servo travel; negative = opening dead time)
 feeding_pending = None
 feeding_last_error = None
 
@@ -2391,7 +2391,7 @@ def schedule_test_worker(compartment, milliseconds):
         if not bypass_send_confirmed(f"BYPASS:GROUP:{compartment},{milliseconds}",f"BYPASS_ACK:GROUP:{compartment},{milliseconds}"):
             raise RuntimeError("Arduino did not acknowledge timed feed")
         # ACK indicates acceptance, not delivered weight or gate closure.
-        time.sleep(milliseconds/1000+.25)
+        time.sleep(feeding_schedule.sequence_seconds(milliseconds/1000)+.25)
         if not schedule_test_cancel.is_set():
             with schedule_test_lock: schedule_test.update(status="completed",updatedAt=utc_timestamp())
     except Exception as exc:
@@ -3711,12 +3711,21 @@ FEED_SESSIONS = {"STARTER": 6, "GROWER": 4, "FINISHER": 4}
 # Compartment 2 measured 2026-11-08 (Checkpoint F-B), hopper drop vs gate time:
 # 1.002 s -> 177 g, 1.529 s -> 250 g, 1.534 s -> 233 g, 1.902 s -> 289 g
 # (and 250 g caught hole by hole at 1.53 s). Least squares: 52.2 g + 124.1 g/s
-# (residuals within +-9 g). Compartment 1 is still the preliminary 101.39 g/s.
+# (residuals within +-9 g).
+# Compartment 1 measured 2026-11-27 (chick booster), each hole caught on a kitchen
+# scale (10 g steps), total of holes 1-5: 0.3 s -> 40 g, 0.4 s -> 50 g,
+# 0.7 s -> 110 g, 1.0 s -> 180 g, 1.5 s -> 240 g (0.2 s read 0). Least squares:
+# -12.1 g + 174.5 g/s (residuals within +-18 g); the negative offset is the
+# ~0.07 s the servos take to open before feed flows. Was 101.39 g/s, offset 0.
+# Compartment 2 re-measured 2026-11-27 (Integra 2) with the holes opened one after
+# another (Dispense group 2, total caught): 0.3 s -> 40 g, 0.4 s -> 70 g, 0.7 s -> 110 g,
+# 1.0 s -> 160 g, 1.5 s -> 260 g. Least squares: -10.1 g + 177.0 g/s (residuals within
+# +-10 g). Replaces 52.2 g + 124.1 g/s above, measured with all five gates at once.
 FEED_RATES = feeding_rates
 FEED_OFFSETS = feeding_offsets
-# Gates whose output was measured (hopper drops). Unmeasured gates are only
-# chosen when no measured compartment is suitable.
-FEED_GATE_MEASURED = {1: False, 2: True}
+# Gates whose output was measured. Unmeasured gates are only chosen when no
+# measured compartment is suitable.
+FEED_GATE_MEASURED = {1: True, 2: True}
 DEFAULT_FEED_CONFIG = {"birdCount": None, "batchStartDate": None, "times": [], "timezone": "Asia/Manila", "automaticEnabled": False}
 
 def _feed_plan(config, stage):
@@ -3963,7 +3972,7 @@ def _feed_job_run(compartment, target, source, calculation):
                 feeding_gates[str(compartment)]["status"] = "AWAITING_ACK"
             if not send_command(f"FEED:DISPENSE:{compartment},{ms}"):
                 raise RuntimeError("Arduino serial command failed")
-            deadline = time.monotonic() + max(FEED_ACK_TIMEOUT_SECONDS, ms/1000 + 3)
+            deadline = time.monotonic() + max(FEED_ACK_TIMEOUT_SECONDS, feeding_schedule.sequence_seconds(ms/1000) + 3)
             while time.monotonic() < deadline:
                 if feed_job_stop.is_set():
                     raise RuntimeError("Stopped by operator")

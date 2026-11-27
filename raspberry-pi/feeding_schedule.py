@@ -47,6 +47,19 @@ KEEP_DAYS = 7
 MIN_GATE_SECONDS = 0.1
 
 
+# The Arduino opens a compartment's five holes one after another (owner
+# 2026-11-27), each for the gate time, with HOLE_GAP_SECONDS between them, so a
+# feed takes sequence_seconds(gate time) from start to COMPLETED. Must match
+# HOLES_PER_GATE / HOLE_GAP_MS in the firmware.
+HOLES_PER_GATE = 5
+HOLE_GAP_SECONDS = 1.0
+
+
+def sequence_seconds(hole_seconds):
+    """Wall time for one feed whose holes each open for `hole_seconds`."""
+    return HOLES_PER_GATE * hole_seconds + (HOLES_PER_GATE - 1) * HOLE_GAP_SECONDS
+
+
 def gate_seconds(grams, rate, offset=0.0):
     """Gate time for `grams`: each opening delivers `offset` g while the
     servos move, plus `rate` g/s (measured 2026-11-08 for compartment 2)."""

@@ -191,14 +191,26 @@ bool gateActive[GATE_COUNT] = {false, false};
 unsigned long gateStart[GATE_COUNT] = {0, 0};
 unsigned long gateDuration[GATE_COUNT] = {0, 0};
 const char* gateLastStatus[GATE_COUNT] = {"CLOSED", "CLOSED"};
+// Sequential holes (owner 2026-11-27): opening all five servos at once left
+// some shut (servo supply), so a feed opens hole 1..5 one after another, each
+// for the requested time, and waits HOLE_GAP_MS after each hole closes (feed stopped, one servo moving at a time). The
+// FEED:DISPENSE duration is the time per hole. Measured gate models are the
+// total of the five holes at that per-hole time.
+const uint8_t HOLES_PER_GATE = 5;
+const unsigned long HOLE_GAP_MS = 1000;  // wait for the hole to close and the feed to stop
+uint8_t gateHole[GATE_COUNT] = {0, 0};
+bool gateInGap[GATE_COUNT] = {false, false};
+unsigned long gatePhaseStart[GATE_COUNT] = {0, 0};
 
 void setPcaAngle(uint8_t channel, int angle);
+uint8_t gateChannel(uint8_t gate, uint8_t hole) {
+  // Compartment 1: channels 0-4; compartment 2: channels 11-15.
+  return gate == 0 ? hole : 11 + hole;
+}
 void setGateAngle(uint8_t gate, int angle) {
   if (gate >= GATE_COUNT) return;
-  // Feeding compartments consist of five synchronized PCA9685 servos each.
-  // Compartment 1: channels 0-4; compartment 2: channels 11-15.
-  for (uint8_t j=0; j<5; j++)
-    setPcaAngle(gate == 0 ? j : 11+j, angle);
+  for (uint8_t j=0; j<HOLES_PER_GATE; j++)
+    setPcaAngle(gateChannel(gate, j), angle);
 }
 
 void emitGateStatus(uint8_t gate, const char* status) {
@@ -220,8 +232,18 @@ void closeGate(uint8_t gate, const char* status) {
 void updateFeedGates() {
   unsigned long now = millis();
   for (uint8_t i = 0; i < GATE_COUNT; i++) {
-    if (gateActive[i] && now - gateStart[i] >= gateDuration[i]) {
-      closeGate(i, "COMPLETED");
+    if (!gateActive[i]) continue;
+    if (!gateInGap[i]) {
+      if (now - gatePhaseStart[i] < gateDuration[i]) continue;
+      setPcaAngle(gateChannel(i, gateHole[i]), GATE_CLOSED[i]);
+      if (gateHole[i] + 1 >= HOLES_PER_GATE) { closeGate(i, "COMPLETED"); continue; }
+      gateInGap[i] = true;
+      gatePhaseStart[i] = now;
+    } else if (now - gatePhaseStart[i] >= HOLE_GAP_MS) {
+      gateHole[i]++;
+      gateInGap[i] = false;
+      gatePhaseStart[i] = now;
+      setPcaAngle(gateChannel(i, gateHole[i]), GATE_OPEN[i]);
     }
   }
 }
@@ -296,10 +318,13 @@ bool handleFeedCommand(String command) {
   for (uint8_t j = 0; j < GATE_COUNT; j++) {
     if (gateActive[j]) { Serial.println("FEED_ERROR:BUSY"); return true; }
   }
-  gateDuration[i] = ms;
+  gateDuration[i] = ms;  // per hole
   gateStart[i] = millis();
   gateActive[i] = true;
-  setGateAngle(i, GATE_OPEN[i]);
+  gateHole[i] = 0;
+  gateInGap[i] = false;
+  gatePhaseStart[i] = gateStart[i];
+  setPcaAngle(gateChannel(i, 0), GATE_OPEN[i]);
   emitGateStatus(i, "STARTED");
   return true;
 }
@@ -370,16 +395,36 @@ const unsigned long GROUP_MAX_MS = 10000UL; // supervised group test: 0.1-10 sec
 bool groupRunning = false;
 uint8_t groupRunningId = 0;
 unsigned long groupStarted = 0, groupDuration = 0;
+// A maintenance group test runs the holes one after another like a feed
+// (groupSequential); a single-hole test opens one servo (groupSequential false).
+bool groupSequential = false, groupInGap = false;
+uint8_t groupHole = 0;
 void stopGroups() {
   for (uint8_t g=0;g<2;g++) for (uint8_t j=0;j<5;j++)
     setPcaAngle(GROUP_CHANNELS[g][j], GROUP_CLOSED[g][j]);
   groupRunning = false;
+  groupSequential = false;
+  groupInGap = false;
+}
+void finishGroup() {
+  uint8_t finished=groupRunningId;
+  stopGroups();
+  Serial.print(F("BYPASS_GROUP_DONE:")); Serial.println(finished);
 }
 void updateGroups() {
-  if (groupRunning && millis()-groupStarted>=groupDuration) {
-    uint8_t finished=groupRunningId;
-    stopGroups();
-    Serial.print(F("BYPASS_GROUP_DONE:")); Serial.println(finished);
+  if (!groupRunning) return;
+  unsigned long now = millis();
+  uint8_t g = groupRunningId - 1;
+  if (!groupSequential) {
+    if (now-groupStarted>=groupDuration) finishGroup();
+  } else if (!groupInGap) {
+    if (now-groupStarted<groupDuration) return;
+    setPcaAngle(GROUP_CHANNELS[g][groupHole], GROUP_CLOSED[g][groupHole]);
+    if (groupHole + 1 >= HOLES_PER_GATE) { finishGroup(); return; }
+    groupInGap = true; groupStarted = now;
+  } else if (now-groupStarted>=HOLE_GAP_MS) {
+    groupHole++; groupInGap = false; groupStarted = now;
+    setPcaAngle(GROUP_CHANNELS[g][groupHole], GROUP_OPEN[g][groupHole]);
   }
 }
 // BYPASS:HOLE:<compartment 1-2>,<hole 1-5>,<ms 100-10000>: open ONE servo of a
@@ -405,6 +450,7 @@ bool handleHoleCommand(const String &command) {
   uint8_t g = args[0] - '1';
   uint8_t h = args[2] - '1';
   groupRunning = true; groupRunningId = g + 1; groupStarted = millis(); groupDuration = ms;
+  groupSequential = false; groupInGap = false;
   setPcaAngle(GROUP_CHANNELS[g][h], GROUP_OPEN[g][h]);
   maintenanceLastPing = millis();
   Serial.print(F("BYPASS_ACK:HOLE:")); Serial.print(g + 1); Serial.print(','); Serial.print(h + 1);
@@ -440,7 +486,8 @@ bool handleGroupCommand(const String &command) {
   }
   uint8_t g=args[0]-'1';
   groupRunning=true; groupRunningId=g+1; groupStarted=millis(); groupDuration=ms;
-  for (uint8_t i=0;i<5;i++) setPcaAngle(GROUP_CHANNELS[g][i], GROUP_OPEN[g][i]);
+  groupSequential=true; groupInGap=false; groupHole=0;
+  setPcaAngle(GROUP_CHANNELS[g][0], GROUP_OPEN[g][0]);  // holes 1..5 in turn (updateGroups)
   maintenanceLastPing=millis();
   Serial.print(F("BYPASS_ACK:GROUP:")); Serial.print(g+1); Serial.print(','); Serial.println(ms);
   return true;
@@ -525,6 +572,10 @@ void reportOneWeight(const __FlashStringHelper *name, byte dout, byte sck,
   Serial.print(F(",ESTIMATED,")); Serial.println(grams, 1);
 }
 void reportFeedWeight() {
+  // Waiting for an HX711 conversion can hold the loop up to ~220 ms, which
+  // would lengthen a hole's opening; skip weight reports while gates move
+  // (the Pi holds the last reading up to 6 s).
+  if (gateActive[0] || gateActive[1] || groupRunning) return;
   if (millis() - lastWeightReport < WEIGHT_INTERVAL_MS) return;
   lastWeightReport = millis();
   reportOneWeight(F("HOPPER_WEIGHT"), HOPPER_DOUT, HOPPER_SCK, hopperZero, hopperCountsPerGram);
